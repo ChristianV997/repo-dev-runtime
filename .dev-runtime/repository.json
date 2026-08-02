@@ -1,0 +1,38 @@
+{
+  "schema": "RepoDev.Repository.v1",
+  "name": "repo-dev-runtime",
+  "root": ".",
+  "source_paths": [
+    "repo_dev_runtime",
+    "scripts"
+  ],
+  "test_command": [
+    "python",
+    "-m",
+    "pytest",
+    "-q"
+  ],
+  "lint_command": [],
+  "security_command": [],
+  "allowed_paths": [
+    "repo_dev_runtime",
+    "scripts",
+    "tests",
+    "docs"
+  ],
+  "forbidden_paths": [
+    ".env",
+    ".git",
+    "credentials",
+    "secrets"
+  ],
+  "agent_roles": [
+    "planner",
+    "implementer",
+    "tester",
+    "reviewer",
+    "integrator"
+  ],
+  "network_access": false,
+  "pull_request_creation": false
+}
