@@ -17,6 +17,8 @@ class WorktreeManager:
     def __init__(self, repository: str | Path, root: str | Path | None = None) -> None:
         self.repository = Path(repository).resolve()
         self.root = Path(root or self.repository.parent / ".repo-dev-worktrees").resolve()
+        if self.root == self.repository or self.repository in self.root.parents:
+            raise ValueError("worktree root must not be inside the repository")
 
     def create(self, *, run_id: str, base_ref: str = "HEAD") -> Worktree:
         self.root.mkdir(parents=True, exist_ok=True)

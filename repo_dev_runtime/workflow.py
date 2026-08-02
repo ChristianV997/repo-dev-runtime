@@ -41,8 +41,19 @@ class DevelopmentWorkflow:
         envelope.event("workflow_started", repository=self.manifest.name, dry_run=dry_run)
         results: list[DevResult] = []
         previous: list[str] = []
+        worktree_path = self.manifest.root
+        worktree = None
+        if not dry_run:
+            try:
+                worktree = WorktreeManager(self.manifest.root).create(run_id=run_id, base_ref=base_ref)
+                worktree_path = str(worktree.path)
+                envelope.event("worktree_created", path=worktree_path, branch=worktree.branch)
+            except Exception as exc:
+                envelope.write_json("promotion.json", {"status": "blocked", "reason": "worktree_creation_failed", "error_type": type(exc).__name__})
+                envelope.finalize({"schema": "RepoDev.WorkflowRun.v1", "run_id": run_id, "status": "blocked", "repository": self.manifest.name})
+                return WorkflowResult(run_id, "blocked", (), str(run_dir))
         for role in ROLES:
-            task = DevTask.create(repository=self.manifest.name, base_ref=base_ref, role=role, prompt=prompt, acceptance=("return a structured result",), allowed_paths=self.manifest.allowed_paths, dry_run=dry_run)
+            task = DevTask.create(repository=worktree_path, base_ref=base_ref, role=role, prompt=prompt, acceptance=("return a structured result",), allowed_paths=self.manifest.allowed_paths, dry_run=dry_run)
             envelope.event("task_started", task_id=task.task_id, role=role, task_hash=task.task_hash, parents=previous)
             result = self.runtime.execute(task)  # type: ignore[attr-defined]
             result.validate()
@@ -52,11 +63,15 @@ class DevelopmentWorkflow:
             if result.status not in {"succeeded", "skipped"}:
                 envelope.write_json("promotion.json", {"status": "blocked", "reason": f"{role}_failed"})
                 envelope.finalize({"schema": "RepoDev.WorkflowRun.v1", "run_id": run_id, "status": "blocked", "repository": self.manifest.name})
+                if worktree is not None:
+                    WorktreeManager(self.manifest.root).remove(worktree)
                 return WorkflowResult(run_id, "blocked", tuple(results), str(run_dir))
             previous.append(task.task_id)
         # Integrator may prepare a PR artifact, but policy always rejects merge.
         envelope.write_json("promotion.json", {"status": "ready_for_human_review", "merge": False, "pr_creation": self.policy.allow_pr_creation})
         envelope.finalize({"schema": "RepoDev.WorkflowRun.v1", "run_id": run_id, "status": "ready_for_human_review", "repository": self.manifest.name, "roles": list(ROLES)})
+        if worktree is not None:
+            WorktreeManager(self.manifest.root).remove(worktree)
         return WorkflowResult(run_id, "ready_for_human_review", tuple(results), str(run_dir))
 
 
