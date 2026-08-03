@@ -4,7 +4,8 @@
   "root": ".",
   "source_paths": [
     "repo_dev_runtime",
-    "scripts"
+    "scripts",
+    "templates"
   ],
   "test_command": [
     "python",
@@ -18,7 +19,8 @@
     "repo_dev_runtime",
     "scripts",
     "tests",
-    "docs"
+    "docs",
+    "templates"
   ],
   "forbidden_paths": [
     ".env",
