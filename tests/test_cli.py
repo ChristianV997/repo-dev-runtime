@@ -55,21 +55,25 @@ def test_cli_enable_openhands_and_mini_swe_agent_attach_blocked_specs(tmp_path):
 
 
 def test_cli_provider_metadata_json_invalid_json_is_rejected(tmp_path):
+    fixtures_root = tmp_path / "fixtures"
     result = subprocess.run(
-        [sys.executable, "-m", "repo_dev_runtime.cli", "benchmark", "--provider-metadata-json", "not json", "--fixtures-root", str(tmp_path)],
+        [sys.executable, "-m", "repo_dev_runtime.cli", "benchmark", "--provider-metadata-json", "not json", "--fixtures-root", str(fixtures_root)],
         capture_output=True, text=True, check=False,
     )
     assert result.returncode == 1
     assert json.loads(result.stdout)["reason"] == "provider_metadata_json_invalid"
+    assert not fixtures_root.exists()
 
 
 def test_cli_provider_metadata_json_non_object_is_rejected(tmp_path):
+    fixtures_root = tmp_path / "fixtures"
     result = subprocess.run(
-        [sys.executable, "-m", "repo_dev_runtime.cli", "benchmark", "--provider-metadata-json", "[1, 2, 3]", "--fixtures-root", str(tmp_path)],
+        [sys.executable, "-m", "repo_dev_runtime.cli", "benchmark", "--provider-metadata-json", "[1, 2, 3]", "--fixtures-root", str(fixtures_root)],
         capture_output=True, text=True, check=False,
     )
     assert result.returncode == 1
     assert json.loads(result.stdout)["reason"] == "provider_metadata_json_must_be_an_object"
+    assert not fixtures_root.exists()
 
 
 def test_cli_provider_metadata_json_valid_object_is_recorded(tmp_path):

@@ -125,6 +125,19 @@ def _run_benchmark(args) -> int:
         print(json.dumps({"status": "blocked", "reason": "enable_pr_agent_conflicts_with_fake_reviewer"}, indent=2))
         return 1
 
+    # Reject malformed metadata before creating fixture worktrees. This keeps
+    # invalid invocations cheap and guarantees they cannot leave run artifacts.
+    provider_metadata = {}
+    if args.provider_metadata_json:
+        try:
+            provider_metadata = json.loads(args.provider_metadata_json)
+        except json.JSONDecodeError as exc:
+            print(json.dumps({"status": "blocked", "reason": "provider_metadata_json_invalid", "detail": str(exc)}, indent=2))
+            return 1
+        if not isinstance(provider_metadata, dict):
+            print(json.dumps({"status": "blocked", "reason": "provider_metadata_json_must_be_an_object"}, indent=2))
+            return 1
+
     tmp_root = Path(args.fixtures_root).expanduser().resolve() if args.fixtures_root else Path(tempfile.gettempdir()) / "repo-dev-runtime-benchmark"
     tmp_root.mkdir(parents=True, exist_ok=True)
 
@@ -196,17 +209,6 @@ def _run_benchmark(args) -> int:
             approved=False,
             findings=[{"severity": "high", "path": "validator.py", "message": "removes required input validation"}],
         )
-
-    provider_metadata = {}
-    if args.provider_metadata_json:
-        try:
-            provider_metadata = json.loads(args.provider_metadata_json)
-        except json.JSONDecodeError as exc:
-            print(json.dumps({"status": "blocked", "reason": "provider_metadata_json_invalid", "detail": str(exc)}, indent=2))
-            return 1
-        if not isinstance(provider_metadata, dict):
-            print(json.dumps({"status": "blocked", "reason": "provider_metadata_json_must_be_an_object"}, indent=2))
-            return 1
 
     # Record how this run was produced, so a synthetic run is never later
     # mistaken for evidence about a real provider or a real reviewer.
