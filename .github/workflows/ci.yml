@@ -33,6 +33,6 @@ jobs:
             --provider fake --fake-reviewer \
             --fixtures-root "${RUNNER_TEMP}/benchmark-fixtures" \
             --json-out "${RUNNER_TEMP}/benchmark.json"
-          python scripts/check_benchmark_report.py "${RUNNER_TEMP}/benchmark.json"
+          PYTHONPATH=. python scripts/check_benchmark_report.py "${RUNNER_TEMP}/benchmark.json"
       - name: Check whitespace
         run: git diff --check
