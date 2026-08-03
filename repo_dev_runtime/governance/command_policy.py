@@ -15,7 +15,7 @@ class CommandDecision:
 class CommandPolicy:
     blocked_substrings: tuple[str, ...] = (
         "git push", "git merge", "git reset --hard", "git rebase", "rm -rf", "sudo ",
-        "aws s3 cp", "curl ", "wget ", "invoke-webrequest", "python -c", "python -m pip install",
+        "aws s3 cp", "python -c", "python -m pip install",
     )
     allow_network: bool = False
     allow_branch_publish: bool = False
@@ -31,7 +31,10 @@ def evaluate_command(command: str, policy: CommandPolicy | None = None) -> Comma
             continue
         if blocked.lower() in normalized:
             return CommandDecision(False, f"blocked command pattern: {blocked}")
-    if not active.allow_network and any(token in normalized.split() for token in ("curl", "wget", "irm")):
+    if not active.allow_network and any(
+        token in normalized.split()
+        for token in ("curl", "wget", "invoke-webrequest", "irm", "iwr")
+    ):
         return CommandDecision(False, "network command is disabled")
     return CommandDecision(True)
 
