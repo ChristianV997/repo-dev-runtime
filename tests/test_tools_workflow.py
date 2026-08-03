@@ -124,7 +124,9 @@ def test_live_proposal_workflow_only_changes_disposable_worktree(tmp_path):
     (tmp_path / "src" / "app.py").write_text("value = 1\n")
     subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "initial"], check=True)
-    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=("src",), test_command=("git", "status", "--short"))
+    # This is the auto-detected manifest scope: permit normal edits anywhere
+    # inside the disposable repository worktree, never outside it.
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=(".",), test_command=("git", "status", "--short"))
     result = DevelopmentWorkflow(manifest=manifest, policy=RuntimePolicy(), runtime=ProposalRuntime(), artifacts_root=tmp_path / "runs").run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True)
     assert result.status == "ready_for_human_review"
     assert (tmp_path / "src" / "app.py").read_text() == "value = 1\n"

@@ -52,6 +52,15 @@ def test_new_whole_file_and_hash_guard(tmp_path: Path) -> None:
         PatchApplier(root, allowed_paths=("src",)).apply(proposal(root, head, stale))
 
 
+def test_repository_root_allowed_path_permits_in_worktree_edit(tmp_path: Path) -> None:
+    root, head = git_repo(tmp_path)
+    edit = FileEdit("src/app.py", "search_replace", search="value = 1", replace="value = 2")
+
+    PatchApplier(root, allowed_paths=(".",)).apply(proposal(root, head, edit))
+
+    assert (root / "src" / "app.py").read_text(encoding="utf-8") == "value = 2\n"
+
+
 @pytest.mark.parametrize("edit", [
     FileEdit("../escape.py", "whole_file", content="x"),
     FileEdit("/absolute.py", "whole_file", content="x"),
