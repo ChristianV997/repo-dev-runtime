@@ -105,6 +105,14 @@
       "source_repository": "repo-dev-runtime-migration",
       "capability": "installable bootstrap scaffold (Serena config, Semgrep safety rules, session-handoff scripts, dev-stack capability checker, canonical-docs templates, AGENTS.md/CLAUDE.md policy) for stamping baseline AI dev-tooling into a target repository",
       "adaptation": "merged as repo_dev_runtime/scaffold/ (installer.py, config.py) plus a top-level templates/ and install.py, kept separate from the existing repo_dev_runtime package (the live multi-agent control plane) to avoid a namespace/responsibility collision; test imports updated to repo_dev_runtime.scaffold.installer"
+    },
+    {
+      "source_repository": "The-PRAgent/pr-agent",
+      "source_url": "https://github.com/The-PRAgent/pr-agent",
+      "license": "MIT",
+      "status": "reference",
+      "capability": "independent bounded reviewer adapter (PRAgentReviewAdapter) producing RepoDev.ReviewVerdict.v1-shaped output for the provider-evaluation layer",
+      "adaptation": "implemented a disabled-by-default subprocess bridge (repo_dev_runtime/eval/pr_agent.py) plus a deterministic FakePRAgentAdapter for tests/benchmarks; the exact live PR-Agent CLI/API contract is not assumed or guessed; no PR-Agent source vendored; the adapter has no method to apply edits, merge, push, or create a pull request"
     }
   ]
 }

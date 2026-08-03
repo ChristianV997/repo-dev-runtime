@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ..contracts.models import DevResult, DevTask, RuntimeHealth
+from .models import EvalRequest, EvalResult
 
 
 def _git_head(root: str | Path) -> str:
@@ -87,3 +88,27 @@ def default_fake_provider_factory(case: Any) -> FakeCodingProvider:
     ``make_provider`` callable for ``eval.harness.run_fixture_benchmark``.
     """
     return FakeCodingProvider(case.provider_turns)
+
+
+class FakePRAgentAdapter:
+    """Deterministic stand-in for :class:`~repo_dev_runtime.eval.pr_agent.PRAgentReviewAdapter`,
+    used in tests and the default benchmark run so no real subprocess or
+    external tool is required. Returns a fixed, configurable verdict.
+    """
+
+    name = "fake_pr_agent"
+
+    def __init__(self, *, approved: bool, findings: Sequence[Mapping[str, Any]] = ()) -> None:
+        self.approved = approved
+        self.findings = tuple(dict(x) for x in findings)
+
+    def health(self) -> RuntimeHealth:
+        return RuntimeHealth(self.name, True, True, ("fake", "deterministic", "reviewer_only"), "")
+
+    def __call__(self, request: EvalRequest) -> EvalResult:
+        return EvalResult(
+            request_id=request.request_id,
+            provider=self.name,
+            status="succeeded",
+            normalized={"approved": self.approved, "summary": "fake reviewer verdict", "findings": list(self.findings)},
+        )
