@@ -20,6 +20,7 @@ from .integrations.github import GitHubPublisher
 from .eval.fakes import default_fake_provider_factory
 from .eval.fixtures import FIXTURE_CASES
 from .eval.harness import aggregate_scorecard, run_fixture_benchmark
+from .eval.loader import ProviderLoadError, load_provider
 from .eval.provider_specs import default_provider_specs
 from .eval.report import render_json_report, render_markdown_report
 
@@ -53,6 +54,8 @@ def main() -> int:
     benchmark = sub.add_parser("benchmark", help="run the deterministic fixture benchmark against a coding-agent provider")
     benchmark.add_argument("--fixtures-root", help="temp directory root for synthetic fixture repos (defaults to the OS temp dir)")
     benchmark.add_argument("--provider", choices=["fake", "ollama", "openai_compatible"], default="fake")
+    benchmark.add_argument("--provider-module", help="benchmark an externally-defined provider, given as 'package.module:ClassName'; must implement the DevelopmentRuntime protocol. Requires --live.")
+    benchmark.add_argument("--provider-name", help="scorecard name for --provider-module (defaults to the provider's own .name)")
     benchmark.add_argument("--live", action="store_true", help="required to run a real (non-fake) provider")
     benchmark.add_argument("--enable-pr-agent", action="store_true", help="opt in to the disabled-by-default PR-Agent reviewer bridge (still requires its own command/credential to be configured)")
     benchmark.add_argument("--pr-agent-command", help="reviewer executable/command; overrides the PR_AGENT_COMMAND environment variable")
@@ -111,7 +114,27 @@ def _run_benchmark(args) -> int:
     tmp_root = Path(args.fixtures_root).expanduser().resolve() if args.fixtures_root else Path(tempfile.gettempdir()) / "repo-dev-runtime-benchmark"
     tmp_root.mkdir(parents=True, exist_ok=True)
 
-    if args.provider == "fake":
+    if args.provider_module:
+        if not args.live:
+            print(json.dumps({"status": "blocked", "reason": "real_provider_requires_live"}, indent=2))
+            return 1
+        policy = RuntimePolicy(network_access=True, allow_external_provider_benchmark=True)
+        try:
+            policy.authorize("external_provider_benchmark")
+        except PermissionError as exc:
+            print(json.dumps({"status": "blocked", "reason": str(exc)}, indent=2))
+            return 1
+        try:
+            runtime = load_provider(args.provider_module)
+        except ProviderLoadError as exc:
+            print(json.dumps({"status": "blocked", "reason": "provider_module_not_loadable", "detail": str(exc)}, indent=2))
+            return 1
+        provider_name = args.provider_name or runtime.name
+
+        def make_provider(case, _runtime=runtime):
+            return _runtime
+
+    elif args.provider == "fake":
         provider_name = "fake_coding_provider"
         make_provider = default_fake_provider_factory
     else:
