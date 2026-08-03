@@ -16,6 +16,13 @@ import json
 import sys
 from pathlib import Path
 
+# Direct ``python scripts/check_benchmark_report.py`` execution places only
+# ``scripts/`` on sys.path. Make the repository package importable without
+# requiring callers or CI to provide an ambient PYTHONPATH.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from repo_dev_runtime.eval.fixtures import FIXTURE_CASES
 
 
