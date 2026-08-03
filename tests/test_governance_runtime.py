@@ -1,0 +1,61 @@
+import json
+
+import pytest
+
+from repo_dev_runtime.discovery import validate_consumer
+from repo_dev_runtime.governance.artifacts import RunEnvelope
+from repo_dev_runtime.governance.command_policy import CommandPolicy, evaluate_command
+from repo_dev_runtime.governance.provenance import load_provenance
+from repo_dev_runtime.governance.roles import role_map
+from repo_dev_runtime.scheduler import SchedulePlan, TaskStateStore
+from repo_dev_runtime.tools.diagnostics import actionable_output
+
+
+def test_provenance_inventory_is_valid():
+    components = load_provenance("provenance/source_inventory.json")
+    assert components
+    assert any(item.status == "excluded" for item in components)
+
+
+def test_command_policy_blocks_mutation_and_network():
+    assert not evaluate_command("git push origin main").allowed
+    assert not evaluate_command("curl https://example.com").allowed
+    assert evaluate_command("git status").allowed
+    assert evaluate_command("git push", CommandPolicy(allow_network=True)).allowed is False
+
+
+def test_roles_have_review_boundary():
+    roles = role_map()
+    assert set(roles) == {"planner", "implementer", "tester", "reviewer", "integrator"}
+    assert roles["integrator"].requires_human_review
+
+
+def test_scheduler_state_is_resumable_and_atomic(tmp_path):
+    plan = SchedulePlan("python -m pytest", dry_run_command="python -m pytest --collect-only")
+    plan.validate()
+    store = TaskStateStore(tmp_path / "state.json")
+    assert store.update("task-1", "running", attempt=1)["status"] == "running"
+    assert store.load()["task-1"]["attempt"] == 1
+    assert store.update("task-1", "succeeded")["status"] == "succeeded"
+
+
+def test_event_hash_is_stable_for_same_event_shape(tmp_path):
+    first = RunEnvelope("one", tmp_path / "one")
+    second = RunEnvelope("two", tmp_path / "two")
+    first.event("task_started", task_id="x")
+    second.event("task_started", task_id="x")
+    assert first.events[0]["event_hash"] == second.events[0]["event_hash"]
+    assert "created_at" in first.events[0]
+
+
+def test_diagnostics_are_bounded():
+    result = actionable_output("\n".join(f"line-{i}" for i in range(100)), max_lines=3, max_chars=100)
+    assert result.splitlines() == ["line-97", "line-98", "line-99"]
+
+
+def test_consumer_validation_is_read_only(tmp_path):
+    (tmp_path / ".git").mkdir()
+    result = validate_consumer(tmp_path)
+    assert not result["valid"]
+    assert not (tmp_path / ".dev-runtime").exists()
+

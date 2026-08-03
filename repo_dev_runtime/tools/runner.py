@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
+
+from ..governance.command_policy import CommandPolicy, evaluate_command
 
 
 @dataclass(frozen=True)
@@ -20,8 +23,9 @@ class CommandResult:
 def run_command(command: Sequence[str], *, cwd: str | Path, timeout_s: float = 120.0, max_output_bytes: int = 512_000, network_access: bool = False) -> CommandResult:
     if not command or any(not isinstance(item, str) or not item for item in command):
         raise ValueError("command must be a non-empty sequence of strings")
-    if not network_access and any(token.lower() in {"curl", "wget", "invoke-webrequest", "irm"} for token in command):
-        raise PermissionError("network-capable command is disabled by policy")
+    decision = evaluate_command(shlex.join(command), CommandPolicy(allow_network=network_access))
+    if not decision.allowed:
+        raise PermissionError(decision.reason)
     environment = {key: value for key, value in os.environ.items() if key not in {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"}}
     try:
         completed = subprocess.run(list(command), cwd=str(Path(cwd).resolve()), capture_output=True, text=True, timeout=timeout_s, check=False, shell=False, env=environment)
