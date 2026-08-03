@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
+import tempfile
 from pathlib import Path
 
 from .manifest import load_manifest
@@ -15,6 +17,12 @@ from .runtimes.dry_run import DryRunRuntime
 from .governance.policy import RuntimePolicy
 from .workflow import DevelopmentWorkflow
 from .integrations.github import GitHubPublisher
+from .eval.fakes import FakePRAgentAdapter, default_fake_provider_factory
+from .eval.fixtures import FIXTURE_CASES
+from .eval.harness import aggregate_scorecard, run_fixture_benchmark
+from .eval.loader import ProviderLoadError, load_provider
+from .eval.provider_specs import default_provider_specs
+from .eval.report import append_history, render_json_report, render_markdown_report
 
 
 def main() -> int:
@@ -43,6 +51,23 @@ def main() -> int:
     run.add_argument("--apply-edits", action="store_true", help="accept only validated implementer proposals in a disposable worktree")
     run.add_argument("--max-fix-attempts", type=int, default=0, help="bounded repair proposals after failed quality checks (0-3)")
     run.add_argument("--artifacts-root")
+    benchmark = sub.add_parser("benchmark", help="run the deterministic fixture benchmark against a coding-agent provider")
+    benchmark.add_argument("--fixtures-root", help="temp directory root for synthetic fixture repos (defaults to the OS temp dir)")
+    benchmark.add_argument("--provider", choices=["fake", "ollama", "openai_compatible"], default="fake")
+    benchmark.add_argument("--provider-module", help="benchmark an externally-defined provider, given as 'package.module:ClassName'; must implement the DevelopmentRuntime protocol. Requires --live.")
+    benchmark.add_argument("--provider-name", help="scorecard name for --provider-module (defaults to the provider's own .name)")
+    benchmark.add_argument("--live", action="store_true", help="required to run a real (non-fake) provider")
+    benchmark.add_argument("--enable-pr-agent", action="store_true", help="opt in to the disabled-by-default PR-Agent reviewer bridge (still requires its own command/credential to be configured)")
+    benchmark.add_argument("--fake-reviewer", action="store_true", help="use a deterministic rejecting reviewer so the reviewer fixture is exercised without an external tool; contract testing only, never evidence about a real reviewer")
+    benchmark.add_argument("--pr-agent-command", help="reviewer executable/command; overrides the PR_AGENT_COMMAND environment variable")
+    benchmark.add_argument("--pr-agent-required-credential", help="environment variable name the reviewer bridge requires; a missing value yields a blocked result")
+    benchmark.add_argument("--enable-openhands", action="store_true", help="prep-only: emits a blocked BenchmarkProviderSpec, never installs or executes OpenHands")
+    benchmark.add_argument("--enable-mini-swe-agent", action="store_true", help="prep-only: emits a blocked BenchmarkProviderSpec, never installs or executes mini-SWE-agent")
+    benchmark.add_argument("--provider-metadata-json", help='JSON object of provider provenance recorded on the scorecard, e.g. \'{"version": "1.2.3", "lock_hash": "...", "python": "3.12", "model": "..."}\'')
+    benchmark.add_argument("--max-fix-attempts", type=int, default=1)
+    benchmark.add_argument("--json-out")
+    benchmark.add_argument("--markdown-out")
+    benchmark.add_argument("--history-out", nargs="?", const="", help="append this run's JSON report as one JSONL line; defaults to ~/.repo-dev-runtime/eval-history/<date>.jsonl when given without a value")
     args = parser.parse_args()
     if args.command == "probe":
         root = Path(args.path).resolve()
@@ -81,8 +106,115 @@ def main() -> int:
         result = DevelopmentWorkflow(manifest=manifest, policy=policy, runtime=runtime, artifacts_root=artifacts_root).run(prompt=args.prompt, base_ref=args.base_ref, dry_run=not args.live, run_id=args.run_id, resume=args.resume, approved=args.approve_paid, publisher=publisher, create_pr=args.create_pr, apply_edits=args.apply_edits, max_fix_attempts=args.max_fix_attempts)
         print(json.dumps({"run_id": result.run_id, "status": result.status, "artifact_dir": result.artifact_dir, "results": [item.to_dict() for item in result.results]}, indent=2))
         return 0 if result.status in {"ready_for_human_review", "pr_created"} else 1
+    if args.command == "benchmark":
+        return _run_benchmark(args)
     health = {name: value.__dict__ for name, value in default_registry().health().items()}
     print(json.dumps(health, indent=2, default=str))
+    return 0
+
+
+def _run_benchmark(args) -> int:
+    tmp_root = Path(args.fixtures_root).expanduser().resolve() if args.fixtures_root else Path(tempfile.gettempdir()) / "repo-dev-runtime-benchmark"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+
+    if args.provider_module:
+        if not args.live:
+            print(json.dumps({"status": "blocked", "reason": "real_provider_requires_live"}, indent=2))
+            return 1
+        policy = RuntimePolicy(network_access=True, allow_external_provider_benchmark=True)
+        try:
+            policy.authorize("external_provider_benchmark")
+        except PermissionError as exc:
+            print(json.dumps({"status": "blocked", "reason": str(exc)}, indent=2))
+            return 1
+        try:
+            runtime = load_provider(args.provider_module)
+        except ProviderLoadError as exc:
+            print(json.dumps({"status": "blocked", "reason": "provider_module_not_loadable", "detail": str(exc)}, indent=2))
+            return 1
+        provider_name = args.provider_name or runtime.name
+
+        def make_provider(case, _runtime=runtime):
+            return _runtime
+
+    elif args.provider == "fake":
+        provider_name = "fake_coding_provider"
+        make_provider = default_fake_provider_factory
+    else:
+        if not args.live:
+            print(json.dumps({"status": "blocked", "reason": "real_provider_requires_live"}, indent=2))
+            return 1
+        policy = RuntimePolicy(
+            allow_ollama=args.provider == "ollama", allow_omniroute=args.provider == "openai_compatible",
+            network_access=True, allow_external_provider_benchmark=True,
+        )
+        try:
+            policy.authorize("external_provider_benchmark")
+        except PermissionError as exc:
+            print(json.dumps({"status": "blocked", "reason": str(exc)}, indent=2))
+            return 1
+        registry = default_registry(ollama_enabled=args.provider == "ollama" or None, omniroute_enabled=args.provider == "openai_compatible" or None)
+        runtime = registry.get(args.provider)
+        provider_name = args.provider
+
+        def make_provider(case, _runtime=runtime):
+            return _runtime
+
+    reviewer_adapter = None
+    if args.enable_pr_agent:
+        from .eval.pr_agent import PRAgentReviewAdapter
+
+        reviewer_adapter = PRAgentReviewAdapter(
+            command=shlex.split(args.pr_agent_command) if args.pr_agent_command else None,
+            enabled=True,
+            required_credential=args.pr_agent_required_credential,
+        ).review
+    elif args.fake_reviewer:
+        reviewer_adapter = FakePRAgentAdapter(
+            approved=False,
+            findings=[{"severity": "high", "path": "validator.py", "message": "removes required input validation"}],
+        )
+
+    provider_metadata = {}
+    if args.provider_metadata_json:
+        try:
+            provider_metadata = json.loads(args.provider_metadata_json)
+        except json.JSONDecodeError as exc:
+            print(json.dumps({"status": "blocked", "reason": "provider_metadata_json_invalid", "detail": str(exc)}, indent=2))
+            return 1
+        if not isinstance(provider_metadata, dict):
+            print(json.dumps({"status": "blocked", "reason": "provider_metadata_json_must_be_an_object"}, indent=2))
+            return 1
+
+    # Record how this run was produced, so a synthetic run is never later
+    # mistaken for evidence about a real provider or a real reviewer.
+    provider_metadata = dict(provider_metadata) | {
+        "benchmark_kind": "synthetic" if not args.provider_module and args.provider == "fake" else "live_provider",
+        "reviewer_kind": "real" if args.enable_pr_agent else ("fake" if args.fake_reviewer else "none"),
+    }
+
+    results = run_fixture_benchmark(FIXTURE_CASES, make_provider=make_provider, provider_name=provider_name, reviewer_adapter=reviewer_adapter, tmp_root=tmp_root, max_fix_attempts=args.max_fix_attempts)
+    scorecard = aggregate_scorecard(provider_name, results, provider_metadata=provider_metadata)
+
+    provider_specs = []
+    if args.enable_openhands or args.enable_mini_swe_agent:
+        specs = {spec.provider: spec for spec in default_provider_specs()}
+        if args.enable_openhands:
+            provider_specs.append(specs["openhands"])
+        if args.enable_mini_swe_agent:
+            provider_specs.append(specs["mini_swe_agent"])
+
+    json_report = render_json_report(scorecards=[scorecard], fixture_results=results, provider_specs=provider_specs)
+    markdown_report = render_markdown_report(scorecards=[scorecard], fixture_results=results, provider_specs=provider_specs)
+
+    if args.json_out:
+        Path(args.json_out).write_text(json.dumps(json_report, indent=2), encoding="utf-8")
+    else:
+        print(json.dumps(json_report, indent=2))
+    if args.markdown_out:
+        Path(args.markdown_out).write_text(markdown_report, encoding="utf-8")
+    if args.history_out is not None:
+        append_history(json_report, path=args.history_out or None)
     return 0
 
 

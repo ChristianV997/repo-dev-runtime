@@ -105,6 +105,46 @@
       "source_repository": "repo-dev-runtime-migration",
       "capability": "installable bootstrap scaffold (Serena config, Semgrep safety rules, session-handoff scripts, dev-stack capability checker, canonical-docs templates, AGENTS.md/CLAUDE.md policy) for stamping baseline AI dev-tooling into a target repository",
       "adaptation": "merged as repo_dev_runtime/scaffold/ (installer.py, config.py) plus a top-level templates/ and install.py, kept separate from the existing repo_dev_runtime package (the live multi-agent control plane) to avoid a namespace/responsibility collision; test imports updated to repo_dev_runtime.scaffold.installer"
+    },
+    {
+      "source_repository": "The-PRAgent/pr-agent",
+      "source_url": "https://github.com/The-PRAgent/pr-agent",
+      "license": "MIT",
+      "status": "reference",
+      "capability": "independent bounded reviewer adapter (PRAgentReviewAdapter) producing RepoDev.ReviewVerdict.v1-shaped output for the provider-evaluation layer",
+      "adaptation": "implemented a disabled-by-default subprocess bridge (repo_dev_runtime/eval/pr_agent.py) plus a deterministic FakePRAgentAdapter for tests/benchmarks; the exact live PR-Agent CLI/API contract is not assumed or guessed; no PR-Agent source vendored; the adapter has no method to apply edits, merge, push, or create a pull request"
+    },
+    {
+      "source_repository": "OpenBMB/RepoAgent",
+      "source_url": "https://github.com/OpenBMB/RepoAgent",
+      "license": "Apache-2.0",
+      "status": "reference",
+      "capability": "richer repository-context generation evaluated as an optional ContextProvider for the provider-evaluation layer",
+      "adaptation": "defined a normalized ContextProvider interface (repo_dev_runtime/eval/context_providers.py) with capability/version/license/source_url metadata and a fake provider for deterministic tests; no RepoAgent source vendored; not wired into the live workflow context path, which continues to use the static repository map by default"
+    },
+    {
+      "source_repository": "tree-sitter/tree-sitter",
+      "source_url": "https://github.com/tree-sitter/tree-sitter",
+      "license": "MIT",
+      "status": "reference",
+      "capability": "syntax-aware repository parsing evaluated as an optional repository-context provider",
+      "adaptation": "defined a ContextProvider interface (repo_dev_runtime/eval/context_providers.py) plus a fake provider for deterministic tests; no tree-sitter grammars, bindings, or source vendored; the dependency-free static repository map (context.build_adaptive_context) remains the default fallback and is unmodified"
+    },
+    {
+      "source_repository": "All-Hands-AI/OpenHands",
+      "source_url": "https://github.com/All-Hands-AI/OpenHands",
+      "license": "MIT",
+      "status": "reference",
+      "capability": "autonomous coding agent execution evaluated for benchmark comparison",
+      "adaptation": "produced a benchmark-provider specification only (eval/provider_specs.py: OPENHANDS_SPEC, evaluation_status=blocked); not installed, not vendored, not adopted as a runtime, not wired into runtimes/factory.py or runtimes/registry.py, and therefore never part of default routing"
+    },
+    {
+      "source_repository": "SWE-agent/mini-swe-agent",
+      "source_url": "https://github.com/SWE-agent/mini-swe-agent",
+      "license": "MIT",
+      "status": "reference",
+      "capability": "minimal autonomous coding-agent loop evaluated for benchmark comparison",
+      "adaptation": "produced a benchmark-provider specification only (eval/provider_specs.py: MINI_SWE_AGENT_SPEC, evaluation_status=blocked); not installed, not vendored, not adopted as a runtime, not wired into runtimes/factory.py or runtimes/registry.py, and therefore never part of default routing"
     }
   ]
 }
