@@ -14,6 +14,7 @@ class RuntimePolicy:
     allow_pr_creation: bool = False
     allow_branch_publish: bool = False
     allow_merge: bool = False
+    allow_external_provider_benchmark: bool = False
     network_access: bool = False
 
     def validate(self) -> None:
@@ -36,3 +37,5 @@ class RuntimePolicy:
             raise PermissionError("automatic merge is permanently disabled")
         if capability == "network" and not self.network_access:
             raise PermissionError("network access is disabled")
+        if capability == "external_provider_benchmark" and not self.allow_external_provider_benchmark:
+            raise PermissionError("external provider benchmarking is disabled")

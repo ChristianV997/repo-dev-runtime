@@ -5,6 +5,7 @@ import pytest
 from repo_dev_runtime.discovery import validate_consumer
 from repo_dev_runtime.governance.artifacts import RunEnvelope
 from repo_dev_runtime.governance.command_policy import CommandPolicy, evaluate_command
+from repo_dev_runtime.governance.policy import RuntimePolicy
 from repo_dev_runtime.governance.provenance import load_provenance
 from repo_dev_runtime.governance.roles import role_map
 from repo_dev_runtime.scheduler import SchedulePlan, TaskStateStore
@@ -67,3 +68,14 @@ def test_consumer_validation_is_read_only(tmp_path):
     result = validate_consumer(tmp_path)
     assert not result["valid"]
     assert not (tmp_path / ".dev-runtime").exists()
+
+
+def test_external_provider_benchmark_disabled_by_default():
+    policy = RuntimePolicy()
+    with pytest.raises(PermissionError):
+        policy.authorize("external_provider_benchmark")
+
+
+def test_external_provider_benchmark_allowed_when_enabled():
+    policy = RuntimePolicy(allow_external_provider_benchmark=True)
+    policy.authorize("external_provider_benchmark")  # must not raise
