@@ -1,0 +1,73 @@
+{
+  "schema": "RepoDev.Provenance.v1",
+  "runtime_repository": "repo-dev-runtime",
+  "components": [
+    {
+      "source_repository": "MarketOS",
+      "source_commit": "d84f111",
+      "source_path": "scripts/ai/check_dev_stack.py",
+      "capability": "read-only capability discovery",
+      "adaptation": "generalized into repo_dev_runtime.discovery without product-specific paths"
+    },
+    {
+      "source_repository": "MarketOS",
+      "source_commit": "d84f111",
+      "source_path": "scripts/ai/filter_test_output.py",
+      "capability": "bounded diagnostic reduction",
+      "adaptation": "generalized into repo_dev_runtime.tools.diagnostics"
+    },
+    {
+      "source_repository": "MarketOS",
+      "source_commit": "d84f111",
+      "source_path": "backend/research/swarm_adapters.py",
+      "capability": "Hermes and DeerFlow sidecar adapters",
+      "adaptation": "retained as repository-neutral HTTP/SSE adapters"
+    },
+    {
+      "source_repository": "NeuroTopology-Sim",
+      "source_commit": "82ff384",
+      "source_path": "tools/local_agents/command_guard.py",
+      "capability": "fail-closed command policy",
+      "adaptation": "generalized into repo_dev_runtime.governance.command_policy"
+    },
+    {
+      "source_repository": "NeuroTopology-Sim",
+      "source_commit": "82ff384",
+      "source_path": "tools/local_agents/event_log.py",
+      "capability": "append-only event logging",
+      "adaptation": "aligned with RunEnvelope event artifacts"
+    },
+    {
+      "source_repository": "NeuroTopology-Sim",
+      "source_commit": "82ff384",
+      "source_path": "tools/local_agents/scheduler_plan.py",
+      "capability": "one-shot scheduler plan",
+      "adaptation": "generalized into repo_dev_runtime.scheduler; no daemon copied"
+    },
+    {
+      "source_repository": "NeuroTopology-Sim",
+      "source_commit": "82ff384",
+      "source_path": "tools/local_agents/agent_roles.py",
+      "capability": "role permissions and human boundaries",
+      "adaptation": "generalized into repo_dev_runtime.governance.roles"
+    },
+    {
+      "source_repository": "NeuroTopology-Sim",
+      "source_commit": "82ff384",
+      "source_path": "orchestrator/job_router.py",
+      "capability": "AWS experiment launcher",
+      "adaptation": "excluded: repository-specific deployment, credentials, and uncontrolled cloud execution",
+      "status": "excluded",
+      "excluded_reason": "not safe or repository-neutral for the runtime"
+    },
+    {
+      "source_repository": "NeuroTopology-Sim",
+      "source_commit": "82ff384",
+      "source_path": "data/",
+      "capability": "research datasets and generated artifacts",
+      "adaptation": "excluded from extraction",
+      "status": "excluded",
+      "excluded_reason": "raw/domain data must never enter the coding runtime"
+    }
+  ]
+}

@@ -14,7 +14,7 @@ class FakeRuntime:
 
 def test_runner_redacts_credentials_and_blocks_network(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "secret")
-    result = run_command(["python", "-c", "print('ok')"], cwd=tmp_path)
+    result = run_command(["python", "-m", "pytest", "--version"], cwd=tmp_path)
     assert result.returncode == 0
     try:
         run_command(["curl", "https://example.com"], cwd=tmp_path)
@@ -22,6 +22,15 @@ def test_runner_redacts_credentials_and_blocks_network(tmp_path, monkeypatch):
         pass
     else:
         raise AssertionError("network command should be blocked")
+
+
+def test_runner_blocks_repository_mutation(tmp_path):
+    try:
+        run_command(["git", "push", "origin", "main"], cwd=tmp_path)
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("repository mutation should be blocked")
 
 
 def test_five_role_workflow_writes_envelope(tmp_path):

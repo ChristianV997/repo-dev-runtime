@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -23,10 +24,20 @@ class RunEnvelope:
     events: list[dict[str, Any]] = field(default_factory=list)
 
     def event(self, name: str, **data: Any) -> None:
-        self.events.append({"event": name, "data": data})
+        sequence = len(self.events)
+        event = {
+            "sequence": sequence,
+            "event": name,
+            "data": data,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        event["event_hash"] = hashlib.sha256(
+            json.dumps({"sequence": sequence, "event": name, "data": data}, sort_keys=True, allow_nan=False).encode("utf-8")
+        ).hexdigest()
+        self.events.append(event)
         self.root.mkdir(parents=True, exist_ok=True)
         with (self.root / "events.jsonl").open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps(self.events[-1], sort_keys=True, allow_nan=False) + "\n")
+            stream.write(json.dumps(event, sort_keys=True, allow_nan=False) + "\n")
 
     def write_json(self, name: str, payload: Any) -> Path:
         self.root.mkdir(parents=True, exist_ok=True)
