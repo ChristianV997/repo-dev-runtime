@@ -31,6 +31,9 @@ class OllamaRuntime:
         if not self.enabled:
             return DevResult(task.task_id, self.name, "skipped", error_type="runtime_disabled")
         payload = {"model": task.model if task.model != "default" else self.model, "messages": [{"role": "user", "content": task.prompt}], "stream": False}
+        # Ollama's JSON mode reduces malformed contract responses without granting model authority.
+        if task.role in {"implementer", "reviewer"}:
+            payload["format"] = "json"
         started = time.perf_counter()
         try:
             request = Request(f"{self.base_url}/api/chat", data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
