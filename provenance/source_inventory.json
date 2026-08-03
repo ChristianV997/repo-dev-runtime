@@ -100,6 +100,11 @@
       "status": "reference",
       "capability": "plan/act separation and worktree-per-task autonomy",
       "adaptation": "retained explicit opt-in edit application and disposable worktrees; no IDE integration copied"
+    },
+    {
+      "source_repository": "repo-dev-runtime-migration",
+      "capability": "installable bootstrap scaffold (Serena config, Semgrep safety rules, session-handoff scripts, dev-stack capability checker, canonical-docs templates, AGENTS.md/CLAUDE.md policy) for stamping baseline AI dev-tooling into a target repository",
+      "adaptation": "merged as repo_dev_runtime/scaffold/ (installer.py, config.py) plus a top-level templates/ and install.py, kept separate from the existing repo_dev_runtime package (the live multi-agent control plane) to avoid a namespace/responsibility collision; test imports updated to repo_dev_runtime.scaffold.installer"
     }
   ]
 }
