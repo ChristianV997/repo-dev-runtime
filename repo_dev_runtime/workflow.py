@@ -10,6 +10,7 @@ from typing import Mapping
 
 from .contracts.models import DevResult, DevTask
 from .governance.artifacts import RunEnvelope
+from .governance.credentials import redact_json
 from .governance.policy import RuntimePolicy
 from .manifest import RepoManifest
 from .tools.runner import run_command
@@ -23,6 +24,11 @@ from .review import ReviewValidationError, parse_review_verdict
 
 
 ROLES = ("planner", "implementer", "tester", "reviewer", "integrator")
+
+
+def _write_artifact(envelope: RunEnvelope, name: str, payload: object) -> None:
+    """Persist only redacted run data; execution keeps the original value."""
+    envelope.write_json(name, redact_json(payload))
 
 
 @dataclass(frozen=True)
@@ -65,12 +71,12 @@ class DevelopmentWorkflow:
                 worktree_path = str(worktree.path)
                 envelope.event("worktree_created", path=worktree_path, branch=worktree.branch)
             except Exception as exc:
-                envelope.write_json("promotion.json", {"status": "blocked", "reason": "worktree_creation_failed", "error_type": type(exc).__name__})
+                _write_artifact(envelope, "promotion.json", {"status": "blocked", "reason": "worktree_creation_failed", "error_type": type(exc).__name__})
                 envelope.finalize({"schema": "RepoDev.WorkflowRun.v1", "run_id": run_id, "status": "blocked", "repository": self.manifest.name})
                 return WorkflowResult(run_id, "blocked", (), str(run_dir))
         repository_context, repository_map = build_adaptive_context(worktree_path, objective=prompt, allowed_paths=self.manifest.allowed_paths, forbidden_paths=self.manifest.forbidden_paths, max_bytes=self.manifest.context_max_bytes)
         context_hash = sha256_json(repository_context)
-        envelope.write_json("repository_map.txt", {"map": repository_map})
+        _write_artifact(envelope, "repository_map.txt", {"map": repository_map})
         envelope.event("context_captured", context_hash=context_hash, context_bytes=len(repository_context.encode("utf-8")))
         for role in ROLES:
             role_path = run_dir / f"{role}.json"
@@ -94,7 +100,7 @@ class DevelopmentWorkflow:
             task = DevTask(task_id=task_id, repository=worktree_path, base_ref=base_ref, role=role, prompt=role_prompt, acceptance=("return a structured result",), allowed_paths=self.manifest.allowed_paths, dry_run=dry_run, approval_state="approved" if approved else "not_required")
             task.validate()
             envelope.event("task_started", task_id=task.task_id, role=role, task_hash=task.task_hash, parents=previous)
-            envelope.write_json("checkpoint.json", {"run_id": run_id, "role": role, "status": "running", "task_id": task.task_id})
+            _write_artifact(envelope, "checkpoint.json", {"run_id": run_id, "role": role, "status": "running", "task_id": task.task_id})
             if isinstance(self.runtime, RuntimeRouter):
                 result = self.runtime.execute(task, approved=approved)
             else:
@@ -106,8 +112,8 @@ class DevelopmentWorkflow:
                     if proposal.task_id != task.task_id:
                         raise PatchValidationError("proposal task_id mismatch")
                     applied = PatchApplier(worktree_path, allowed_paths=self.manifest.allowed_paths, forbidden_paths=self.manifest.forbidden_paths).apply(proposal, context_hash=context_hash)
-                    envelope.write_json("proposal.json", proposal.to_dict())
-                    envelope.write_json("applied_patch.json", {"proposal_hash": applied.proposal_hash, "checkpoint_id": applied.checkpoint_id, "changed_files": list(applied.changed_files), "before_hashes": dict(applied.before_hashes), "after_hashes": dict(applied.after_hashes)})
+                    _write_artifact(envelope, "proposal.json", proposal.to_dict())
+                    _write_artifact(envelope, "applied_patch.json", {"proposal_hash": applied.proposal_hash, "checkpoint_id": applied.checkpoint_id, "changed_files": list(applied.changed_files), "before_hashes": dict(applied.before_hashes), "after_hashes": dict(applied.after_hashes)})
                     result = DevResult(result.task_id, result.runtime, result.status, result.output, applied.changed_files, result.commit_sha, result.tests, result.telemetry)
                     envelope.event("proposal_applied", task_id=result.task_id, proposal_hash=proposal.proposal_hash, changed_files=list(applied.changed_files))
                 except (PatchValidationError, UnicodeDecodeError) as exc:
@@ -126,8 +132,8 @@ class DevelopmentWorkflow:
                                 raise PatchValidationError("proposal task_id mismatch")
                             candidate_applied = PatchApplier(worktree_path, allowed_paths=self.manifest.allowed_paths, forbidden_paths=self.manifest.forbidden_paths).apply(candidate_proposal, context_hash=context_hash)
                             result = DevResult(candidate.task_id, candidate.runtime, "succeeded", candidate.output, candidate_applied.changed_files, telemetry=candidate.telemetry)
-                            envelope.write_json("proposal.json", candidate_proposal.to_dict())
-                            envelope.write_json("applied_patch.json", {"proposal_hash": candidate_applied.proposal_hash, "checkpoint_id": candidate_applied.checkpoint_id, "changed_files": list(candidate_applied.changed_files), "before_hashes": dict(candidate_applied.before_hashes), "after_hashes": dict(candidate_applied.after_hashes)})
+                            _write_artifact(envelope, "proposal.json", candidate_proposal.to_dict())
+                            _write_artifact(envelope, "applied_patch.json", {"proposal_hash": candidate_applied.proposal_hash, "checkpoint_id": candidate_applied.checkpoint_id, "changed_files": list(candidate_applied.changed_files), "before_hashes": dict(candidate_applied.before_hashes), "after_hashes": dict(candidate_applied.after_hashes)})
                             envelope.event("proposal_repaired", task_id=repair_task.task_id, attempt=repair_attempt + 1, changed_files=list(candidate_applied.changed_files))
                             task = repair_task
                             repaired = True
@@ -139,18 +145,18 @@ class DevelopmentWorkflow:
             if apply_edits and role == "reviewer" and result.status == "succeeded":
                 try:
                     verdict = parse_review_verdict(result.output)
-                    envelope.write_json("review_verdict.json", verdict.to_dict())
+                    _write_artifact(envelope, "review_verdict.json", verdict.to_dict())
                     if not verdict.approved:
                         result = DevResult(result.task_id, result.runtime, "blocked", result.output, error_type="review_not_approved", error_message=verdict.summary)
                     envelope.event("review_recorded", task_id=result.task_id, approved=verdict.approved, findings=len(verdict.findings))
                 except ReviewValidationError as exc:
                     result = DevResult(result.task_id, result.runtime, "blocked", result.output, error_type=type(exc).__name__, error_message=str(exc))
             results.append(result)
-            envelope.write_json(f"{role}.json", result.to_dict())
+            _write_artifact(envelope, f"{role}.json", result.to_dict())
             envelope.event("task_finished", task_id=task.task_id, role=role, status=result.status)
-            envelope.write_json("checkpoint.json", {"run_id": run_id, "role": role, "status": result.status, "task_id": task.task_id})
+            _write_artifact(envelope, "checkpoint.json", {"run_id": run_id, "role": role, "status": result.status, "task_id": task.task_id})
             if result.status not in {"succeeded", "skipped"}:
-                envelope.write_json("promotion.json", {"status": "blocked", "reason": f"{role}_failed"})
+                _write_artifact(envelope, "promotion.json", {"status": "blocked", "reason": f"{role}_failed"})
                 envelope.finalize({"schema": "RepoDev.WorkflowRun.v1", "run_id": run_id, "status": "blocked", "repository": self.manifest.name})
                 if worktree is not None:
                     WorktreeManager(self.manifest.root).remove(worktree)
@@ -177,7 +183,7 @@ class DevelopmentWorkflow:
                     raise PatchValidationError("proposal task_id mismatch")
                 applied = PatchApplier(worktree_path, allowed_paths=self.manifest.allowed_paths, forbidden_paths=self.manifest.forbidden_paths).apply(proposal, context_hash=retry_hash)
                 result = DevResult(result.task_id, result.runtime, "succeeded", result.output, applied.changed_files, telemetry=result.telemetry)
-                envelope.write_json(f"repair_{attempt + 1}.json", result.to_dict())
+                _write_artifact(envelope, f"repair_{attempt + 1}.json", result.to_dict())
                 envelope.event("repair_applied", task_id=result.task_id, attempt=attempt + 1, changed_files=list(applied.changed_files))
                 results.append(result)
                 repairs_applied = True
@@ -193,7 +199,7 @@ class DevelopmentWorkflow:
             result = self.runtime.execute(task, approved=approved) if isinstance(self.runtime, RuntimeRouter) else self.runtime.execute(task)  # type: ignore[attr-defined]
             try:
                 verdict = parse_review_verdict(result.output)
-                envelope.write_json("final_review_verdict.json", verdict.to_dict())
+                _write_artifact(envelope, "final_review_verdict.json", verdict.to_dict())
                 envelope.event("final_review_recorded", task_id=task.task_id, approved=verdict.approved, findings=len(verdict.findings))
                 if not verdict.approved:
                     quality = {"status": "failed", "checks": quality.get("checks", {}), "reason": "final_review_not_approved"}
@@ -201,9 +207,9 @@ class DevelopmentWorkflow:
             except ReviewValidationError as exc:
                 envelope.event("final_review_rejected", task_id=task.task_id, error_type=type(exc).__name__)
                 quality = {"status": "failed", "checks": quality.get("checks", {}), "reason": "final_review_invalid"}
-        envelope.write_json("quality.json", quality)
+        _write_artifact(envelope, "quality.json", quality)
         if quality["status"] != "passed":
-            envelope.write_json("promotion.json", {"status": "blocked", "reason": "quality_checks_failed", "quality": quality})
+            _write_artifact(envelope, "promotion.json", {"status": "blocked", "reason": "quality_checks_failed", "quality": quality})
             envelope.finalize({"schema": "RepoDev.WorkflowRun.v1", "run_id": run_id, "status": "blocked", "repository": self.manifest.name, "roles": list(ROLES)})
             if worktree is not None:
                 WorktreeManager(self.manifest.root).remove(worktree)
@@ -211,19 +217,19 @@ class DevelopmentWorkflow:
         pr: dict[str, object] = {}
         if create_pr:
             if dry_run or publisher is None:
-                envelope.write_json("promotion.json", {"status": "blocked", "reason": "pr_requires_live_publisher"})
+                _write_artifact(envelope, "promotion.json", {"status": "blocked", "reason": "pr_requires_live_publisher"})
                 if worktree is not None:
                     WorktreeManager(self.manifest.root).remove(worktree)
                 return WorkflowResult(run_id, "blocked", tuple(results), str(run_dir))
             try:
                 pr = publisher.create_from_worktree(worktree=worktree_path, repository=self.manifest.root, branch=worktree.branch if worktree else f"repo-dev/{run_id}", base=base_ref, title=f"repo-dev: {prompt[:72]}", body=f"Generated by repo-dev-runtime run `{run_id}`.\n\nReview artifacts: `{run_dir}`.")
             except Exception as exc:
-                envelope.write_json("promotion.json", {"status": "blocked", "reason": "pr_creation_failed", "error_type": type(exc).__name__, "error_message": str(exc)[:500]})
+                _write_artifact(envelope, "promotion.json", {"status": "blocked", "reason": "pr_creation_failed", "error_type": type(exc).__name__, "error_message": str(exc)[:500]})
                 envelope.finalize({"schema": "RepoDev.WorkflowRun.v1", "run_id": run_id, "status": "blocked", "repository": self.manifest.name, "roles": list(ROLES)})
                 if worktree is not None:
                     WorktreeManager(self.manifest.root).remove(worktree)
                 return WorkflowResult(run_id, "blocked", tuple(results), str(run_dir))
-        envelope.write_json("promotion.json", {"status": "pr_created" if pr else "ready_for_human_review", "merge": False, "pr_creation": bool(pr), "pull_request": pr})
+        _write_artifact(envelope, "promotion.json", {"status": "pr_created" if pr else "ready_for_human_review", "merge": False, "pr_creation": bool(pr), "pull_request": pr})
         envelope.finalize({"schema": "RepoDev.WorkflowRun.v1", "run_id": run_id, "status": "ready_for_human_review", "repository": self.manifest.name, "roles": list(ROLES)})
         if worktree is not None:
             WorktreeManager(self.manifest.root).remove(worktree)

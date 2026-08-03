@@ -14,6 +14,19 @@ class FakeRuntime:
         return DevResult(task.task_id, "fake", "succeeded", output=task.role)
 
 
+class SecretEchoRuntime:
+    secret = "workflow-secret-sentinel"
+
+    def execute(self, task):
+        return DevResult(
+            task.task_id,
+            "fake",
+            "succeeded",
+            output=f"{task.role} api_key={self.secret}",
+            telemetry={"access_token": self.secret},
+        )
+
+
 class ProposalRuntime:
     def execute(self, task):
         if task.role == "implementer":
@@ -69,6 +82,24 @@ def test_five_role_workflow_writes_envelope(tmp_path):
     assert (tmp_path / "runs" / result.run_id / "promotion.json").exists()
     assert (tmp_path / "runs" / result.run_id / "checksums.json").exists()
     assert len(result.results) == 5
+
+
+def test_workflow_redacts_provider_output_before_artifact_persistence(tmp_path):
+    runtime = SecretEchoRuntime()
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=("src",))
+    result = DevelopmentWorkflow(
+        manifest=manifest,
+        policy=RuntimePolicy(),
+        runtime=runtime,
+        artifacts_root=tmp_path / "runs",
+    ).run(prompt="inspect")
+
+    artifact_dir = tmp_path / "runs" / result.run_id
+    persisted = "\n".join(path.read_text(encoding="utf-8") for path in artifact_dir.iterdir() if path.is_file())
+    assert runtime.secret not in persisted
+    assert "[REDACTED]" in (artifact_dir / "planner.json").read_text(encoding="utf-8")
+    # Redaction is an artifact boundary, not a mutation of the live result.
+    assert runtime.secret in result.results[0].output
 
 
 def test_live_proposal_workflow_only_changes_disposable_worktree(tmp_path):
