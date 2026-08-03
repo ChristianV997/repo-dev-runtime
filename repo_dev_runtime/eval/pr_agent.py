@@ -18,8 +18,15 @@ from typing import Sequence
 
 from ..contracts.models import RuntimeHealth
 from ..governance.credentials import CredentialAllowlist, build_subprocess_env, missing_credential_result, redact_text
+from ..governance.policy import RuntimePolicy
 from ..review import ReviewValidationError, parse_review_verdict
 from .models import EvalRequest, EvalResult
+
+# Default policy for direct/programmatic callers that don't pass one
+# explicitly — see eval.loader's identical rationale. cli.py always passes
+# its own real, gated policy (requiring --live plus explicit
+# --approve-external-provider-benchmark) at construction time.
+_PERMISSIVE_DEFAULT_POLICY = RuntimePolicy(network_access=True, allow_external_provider_benchmark=True)
 
 
 def _parse_command_env() -> tuple[str, ...]:
@@ -46,11 +53,15 @@ class PRAgentReviewAdapter:
 
     name = "pr_agent"
 
-    def __init__(self, *, command: Sequence[str] | None = None, enabled: bool | None = None, max_output_bytes: int = 512_000, required_credential: str | None = None) -> None:
+    def __init__(self, *, command: Sequence[str] | None = None, enabled: bool | None = None, max_output_bytes: int = 512_000, required_credential: str | None = None, policy: RuntimePolicy | None = None) -> None:
         self.command = tuple(command) if command else _parse_command_env()
         self.enabled = enabled if enabled is not None else os.getenv("DEV_RUNTIME_PR_AGENT", "false").lower() in {"1", "true", "yes", "on"}
         self.max_output_bytes = max(1_024, int(max_output_bytes))
         self.required_credential = required_credential if required_credential is not None else os.getenv("PR_AGENT_REQUIRED_CREDENTIAL", "").strip()
+        # Defaults to a permissive policy for direct/programmatic callers
+        # (see module-level note); cli.py always passes its own real,
+        # gated policy explicitly.
+        self.policy = policy or _PERMISSIVE_DEFAULT_POLICY
 
     def health(self) -> RuntimeHealth:
         if not self.enabled or not self.command:
@@ -63,6 +74,10 @@ class PRAgentReviewAdapter:
             return EvalResult(request_id=request.request_id, provider=self.name, status="skipped", error_type="provider_disabled")
         if not self.command:
             return EvalResult(request_id=request.request_id, provider=self.name, status="blocked", error_type="command_not_configured")
+        try:
+            self.policy.authorize("pr_agent_review", approved=True)
+        except PermissionError as exc:
+            return EvalResult(request_id=request.request_id, provider=self.name, status="blocked", error_type="policy_denied", error_message=str(exc))
         if self.required_credential and not os.getenv(self.required_credential):
             blocked = missing_credential_result(provider=self.name, name=self.required_credential)
             return EvalResult(request_id=request.request_id, provider=self.name, status=blocked["status"], error_type=blocked["error_type"], error_message=blocked["error_message"])

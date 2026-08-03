@@ -57,6 +57,7 @@ def main() -> int:
     benchmark.add_argument("--provider-module", help="benchmark an externally-defined provider, given as 'package.module:ClassName'; must implement the DevelopmentRuntime protocol. Requires --live.")
     benchmark.add_argument("--provider-name", help="scorecard name for --provider-module (defaults to the provider's own .name)")
     benchmark.add_argument("--live", action="store_true", help="required to run a real (non-fake) provider")
+    benchmark.add_argument("--approve-external-provider-benchmark", action="store_true", help="explicit per-run approval required (alongside --live) to execute a real coding provider or the PR-Agent reviewer bridge")
     benchmark.add_argument("--enable-pr-agent", action="store_true", help="opt in to the disabled-by-default PR-Agent reviewer bridge (still requires its own command/credential to be configured)")
     benchmark.add_argument("--fake-reviewer", action="store_true", help="use a deterministic rejecting reviewer so the reviewer fixture is exercised without an external tool; contract testing only, never evidence about a real reviewer")
     benchmark.add_argument("--pr-agent-command", help="reviewer executable/command; overrides the PR_AGENT_COMMAND environment variable")
@@ -123,12 +124,12 @@ def _run_benchmark(args) -> int:
             return 1
         policy = RuntimePolicy(network_access=True, allow_external_provider_benchmark=True)
         try:
-            policy.authorize("external_provider_benchmark")
+            policy.authorize("external_provider_benchmark", approved=args.approve_external_provider_benchmark)
         except PermissionError as exc:
             print(json.dumps({"status": "blocked", "reason": str(exc)}, indent=2))
             return 1
         try:
-            runtime = load_provider(args.provider_module)
+            runtime = load_provider(args.provider_module, policy=policy)
         except ProviderLoadError as exc:
             print(json.dumps({"status": "blocked", "reason": "provider_module_not_loadable", "detail": str(exc)}, indent=2))
             return 1
@@ -149,7 +150,7 @@ def _run_benchmark(args) -> int:
             network_access=True, allow_external_provider_benchmark=True,
         )
         try:
-            policy.authorize("external_provider_benchmark")
+            policy.authorize("external_provider_benchmark", approved=args.approve_external_provider_benchmark)
         except PermissionError as exc:
             print(json.dumps({"status": "blocked", "reason": str(exc)}, indent=2))
             return 1
@@ -162,12 +163,23 @@ def _run_benchmark(args) -> int:
 
     reviewer_adapter = None
     if args.enable_pr_agent:
+        if not args.live:
+            print(json.dumps({"status": "blocked", "reason": "real_provider_requires_live"}, indent=2))
+            return 1
+        pr_agent_policy = RuntimePolicy(network_access=True, allow_external_provider_benchmark=True)
+        try:
+            pr_agent_policy.authorize("pr_agent_review", approved=args.approve_external_provider_benchmark)
+        except PermissionError as exc:
+            print(json.dumps({"status": "blocked", "reason": str(exc)}, indent=2))
+            return 1
+
         from .eval.pr_agent import PRAgentReviewAdapter
 
         reviewer_adapter = PRAgentReviewAdapter(
             command=shlex.split(args.pr_agent_command) if args.pr_agent_command else None,
             enabled=True,
             required_credential=args.pr_agent_required_credential,
+            policy=pr_agent_policy,
         ).review
     elif args.fake_reviewer:
         reviewer_adapter = FakePRAgentAdapter(

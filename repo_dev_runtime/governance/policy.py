@@ -24,6 +24,8 @@ class RuntimePolicy:
             raise ValueError("paid routing requires OmniRoute to be enabled")
         if self.allow_pr_creation and not self.allow_branch_publish:
             raise ValueError("PR creation requires generated branch publishing")
+        if self.allow_external_provider_benchmark and not self.network_access:
+            raise ValueError("external provider benchmarking requires network_access")
 
     def authorize(self, capability: str, *, approved: bool = False) -> None:
         self.validate()
@@ -37,5 +39,7 @@ class RuntimePolicy:
             raise PermissionError("automatic merge is permanently disabled")
         if capability == "network" and not self.network_access:
             raise PermissionError("network access is disabled")
-        if capability == "external_provider_benchmark" and not self.allow_external_provider_benchmark:
-            raise PermissionError("external provider benchmarking is disabled")
+        if capability == "external_provider_benchmark" and not (self.allow_external_provider_benchmark and approved):
+            raise PermissionError("external provider benchmarking requires explicit approval")
+        if capability == "pr_agent_review" and not (self.allow_external_provider_benchmark and approved):
+            raise PermissionError("PR-Agent reviewer bridge requires explicit approval")
