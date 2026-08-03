@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Sequence
 
 from ..governance.command_policy import CommandPolicy, evaluate_command
+from ..governance.credentials import redact_text
 
 
 @dataclass(frozen=True)
@@ -29,8 +30,10 @@ def run_command(command: Sequence[str], *, cwd: str | Path, timeout_s: float = 1
     environment = {key: value for key, value in os.environ.items() if key not in {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"}}
     try:
         completed = subprocess.run(list(command), cwd=str(Path(cwd).resolve()), capture_output=True, text=True, timeout=timeout_s, check=False, shell=False, env=environment)
-        stdout = completed.stdout.encode("utf-8", errors="replace")[:max_output_bytes].decode("utf-8", errors="replace")
-        stderr = completed.stderr.encode("utf-8", errors="replace")[:max_output_bytes].decode("utf-8", errors="replace")
+        stdout = redact_text(completed.stdout.encode("utf-8", errors="replace")[:max_output_bytes].decode("utf-8", errors="replace"))
+        stderr = redact_text(completed.stderr.encode("utf-8", errors="replace")[:max_output_bytes].decode("utf-8", errors="replace"))
         return CommandResult(tuple(command), completed.returncode, stdout, stderr)
     except subprocess.TimeoutExpired as exc:
-        return CommandResult(tuple(command), None, str(exc.stdout or "")[:max_output_bytes], str(exc.stderr or "")[:max_output_bytes], True)
+        stdout = redact_text(str(exc.stdout or "")[:max_output_bytes])
+        stderr = redact_text(str(exc.stderr or "")[:max_output_bytes])
+        return CommandResult(tuple(command), None, stdout, stderr, True)
