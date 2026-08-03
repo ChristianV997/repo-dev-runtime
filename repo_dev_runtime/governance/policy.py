@@ -43,3 +43,13 @@ class RuntimePolicy:
             raise PermissionError("external provider benchmarking requires explicit approval")
         if capability == "pr_agent_review" and not (self.allow_external_provider_benchmark and approved):
             raise PermissionError("PR-Agent reviewer bridge requires explicit approval")
+        if capability not in {
+            "paid_routing",
+            "pr_creation",
+            "branch_publish",
+            "merge",
+            "network",
+            "external_provider_benchmark",
+            "pr_agent_review",
+        }:
+            raise PermissionError(f"unsupported capability: {capability}")

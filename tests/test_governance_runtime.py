@@ -107,3 +107,8 @@ def test_pr_agent_review_requires_explicit_approval():
     with pytest.raises(PermissionError):
         policy.authorize("pr_agent_review", approved=False)
     policy.authorize("pr_agent_review", approved=True)  # must not raise
+
+
+def test_unknown_capability_is_denied_fail_closed():
+    with pytest.raises(PermissionError, match="unsupported capability"):
+        RuntimePolicy().authorize("future_unreviewed_capability")
