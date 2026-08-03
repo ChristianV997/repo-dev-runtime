@@ -101,6 +101,27 @@ def test_script_runs_end_to_end_against_a_real_benchmark(tmp_path):
     assert "7 fixtures matched" in check.stdout
 
 
+def test_script_runs_without_ambient_pythonpath(tmp_path):
+    report_path = tmp_path / "benchmark.json"
+    benchmark = subprocess.run(
+        [
+            sys.executable, "-m", "repo_dev_runtime.cli", "benchmark",
+            "--provider", "fake", "--fake-reviewer",
+            "--fixtures-root", str(tmp_path / "fixtures"),
+            "--json-out", str(report_path),
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    assert benchmark.returncode == 0, benchmark.stderr
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    check = subprocess.run(
+        [sys.executable, str(_SCRIPT), str(report_path)],
+        capture_output=True, text=True, check=False, env=environment,
+    )
+    assert check.returncode == 0, check.stderr
+
+
 def test_report_records_synthetic_and_reviewer_kind(tmp_path):
     report_path = tmp_path / "benchmark.json"
     subprocess.run(
