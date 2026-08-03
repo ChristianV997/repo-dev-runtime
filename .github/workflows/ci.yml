@@ -3,8 +3,9 @@ name: repo-dev-runtime
 on:
   push:
     branches: [main]
+  # Validate stacked and release-branch PRs as well as PRs targeting main.
+  # The workflow has read-only permissions and no secrets or live providers.
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
