@@ -172,7 +172,12 @@ class PatchApplier:
         path = (self.root / relative).resolve()
         if self.root not in path.parents:
             raise PatchValidationError(WORKTREE_ESCAPE_MESSAGE)
-        if self.allowed_paths and not any(relative == p or relative.startswith(p.rstrip("/") + "/") for p in self.allowed_paths):
+        # A manifest's "." scope means the repository root. Auto-detected
+        # manifests intentionally use it to permit normal in-worktree edits.
+        if self.allowed_paths and "." not in self.allowed_paths and not any(
+            relative == p or relative.startswith(p.rstrip("/") + "/")
+            for p in self.allowed_paths
+        ):
             raise PatchValidationError(f"path is outside allowed_paths: {relative}")
         if any(part.lower() in self.forbidden_paths for part in PurePosixPath(relative).parts):
             raise PatchValidationError(f"forbidden path: {relative}")
