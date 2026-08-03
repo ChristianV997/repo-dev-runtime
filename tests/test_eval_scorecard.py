@@ -28,6 +28,25 @@ def test_scorecard_has_no_single_opaque_score_field():
     assert payload["tasks_blocked_by_policy"] == 0
 
 
+def test_scorecard_carries_provider_metadata_round_trip():
+    metadata = {"version": "0.86.2", "python": "3.12.1", "lock_hash": "abc123", "model": "local-model", "gateway": "ollama"}
+    scorecard = ProviderScorecard(provider="some_provider", provider_metadata=metadata)
+
+    payload = scorecard.to_dict()
+    assert payload["provider_metadata"] == metadata
+
+
+def test_scorecard_provider_metadata_defaults_empty_and_is_backward_compatible():
+    # Existing callers that never pass metadata are unaffected.
+    assert ProviderScorecard(provider="fake").to_dict()["provider_metadata"] == {}
+
+
+def test_scorecard_provider_metadata_rejects_non_finite():
+    scorecard = ProviderScorecard(provider="fake", provider_metadata={"cost": math.nan})
+    with pytest.raises(ValueError):
+        scorecard.validate()
+
+
 def test_scorecard_rejects_non_finite_values():
     scorecard = ProviderScorecard(provider="fake", total_duration_ms=math.inf)
     with pytest.raises(ValueError):

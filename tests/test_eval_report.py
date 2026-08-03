@@ -37,6 +37,21 @@ def test_json_report_is_valid_json_and_contains_expected_sections(tmp_path):
     json.dumps(report)
 
 
+def test_provider_metadata_is_redacted_in_the_json_report(tmp_path):
+    from repo_dev_runtime.eval.models import ProviderScorecard
+
+    scorecard = ProviderScorecard(
+        provider="some_provider",
+        provider_metadata={"version": "1.2.3", "api_key": "super-secret-value"},
+    )
+    report = render_json_report(scorecards=[scorecard], fixture_results=[])
+
+    metadata = report["scorecards"][0]["provider_metadata"]
+    assert metadata["version"] == "1.2.3"
+    assert metadata["api_key"] == "[REDACTED]"
+    assert "super-secret-value" not in json.dumps(report)
+
+
 def test_json_report_text_is_canonical_and_parseable(tmp_path):
     results, scorecard = _build_results(tmp_path)
     text = render_json_report_text(scorecards=[scorecard], fixture_results=results)

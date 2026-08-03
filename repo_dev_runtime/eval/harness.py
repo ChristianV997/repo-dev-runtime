@@ -201,6 +201,7 @@ def aggregate_scorecard(
     health_check_success: bool = True,
     credential_leak_detected: bool = False,
     cost_telemetry: Mapping[str, Any] | None = None,
+    provider_metadata: Mapping[str, Any] | None = None,
     expected_outcomes: Mapping[str, str] | None = None,
 ) -> ProviderScorecard:
     """Pure aggregation, no side effects. ``expected_outcomes`` (fixture_id
@@ -251,4 +252,5 @@ def aggregate_scorecard(
         total_output_bytes=sum(r.output_bytes for r in results),
         cost_telemetry=cost_telemetry or {},
         failure_classification=failure_classification,
+        provider_metadata=provider_metadata or {},
     )

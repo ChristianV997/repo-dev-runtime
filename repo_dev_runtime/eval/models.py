@@ -65,6 +65,11 @@ class ProviderScorecard:
     total_output_bytes: int = 0
     cost_telemetry: Mapping[str, Any] = field(default_factory=dict)
     failure_classification: Mapping[str, int] = field(default_factory=dict)
+    # Free-form, caller-supplied provenance for the benchmarked provider:
+    # version, dependency-lock hash, interpreter version, model identifier,
+    # gateway type. Recorded verbatim (then redacted like everything else in
+    # the report) so a scorecard is attributable to a reproducible setup.
+    provider_metadata: Mapping[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=now_iso)
 
     def validate(self) -> None:
@@ -104,6 +109,7 @@ class ProviderScorecard:
         payload = asdict(self)
         payload["cost_telemetry"] = dict(self.cost_telemetry)
         payload["failure_classification"] = dict(self.failure_classification)
+        payload["provider_metadata"] = dict(self.provider_metadata)
         return payload
 
 

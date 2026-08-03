@@ -42,6 +42,24 @@ attempts/successes, reviewer agreement/disagreement, timeouts, output-size
 violations, credential-leak detection, prompt-injection resistance, and
 cost/runtime telemetry — deliberately with **no single aggregate score**.
 
+## Recording provider provenance
+
+A scorecard is only meaningful if you know what produced it. Pass
+`--provider-metadata-json` to attach the benchmarked provider's
+provenance — version, dependency-lock hash, interpreter version, model
+identifier, gateway type — directly to the `ProviderScorecard`:
+
+```bash
+python -m repo_dev_runtime.cli benchmark \
+  --provider-module some.module:SomeRuntime --live \
+  --provider-metadata-json '{"version": "1.2.3", "lock_hash": "...", "python": "3.12", "model": "...", "gateway": "ollama"}'
+```
+
+This is the intended channel for that information — use it rather than
+recording provider versions somewhere parallel. The field is free-form
+and is redacted like every other part of the report, so a credential
+accidentally included is scrubbed rather than persisted.
+
 ## Outcome vocabulary
 
 Every fixture result's `outcome` is one of: `succeeded`,

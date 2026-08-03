@@ -62,6 +62,7 @@ def main() -> int:
     benchmark.add_argument("--pr-agent-required-credential", help="environment variable name the reviewer bridge requires; a missing value yields a blocked result")
     benchmark.add_argument("--enable-openhands", action="store_true", help="prep-only: emits a blocked BenchmarkProviderSpec, never installs or executes OpenHands")
     benchmark.add_argument("--enable-mini-swe-agent", action="store_true", help="prep-only: emits a blocked BenchmarkProviderSpec, never installs or executes mini-SWE-agent")
+    benchmark.add_argument("--provider-metadata-json", help='JSON object of provider provenance recorded on the scorecard, e.g. \'{"version": "1.2.3", "lock_hash": "...", "python": "3.12", "model": "..."}\'')
     benchmark.add_argument("--max-fix-attempts", type=int, default=1)
     benchmark.add_argument("--json-out")
     benchmark.add_argument("--markdown-out")
@@ -167,8 +168,19 @@ def _run_benchmark(args) -> int:
             required_credential=args.pr_agent_required_credential,
         ).review
 
+    provider_metadata = {}
+    if args.provider_metadata_json:
+        try:
+            provider_metadata = json.loads(args.provider_metadata_json)
+        except json.JSONDecodeError as exc:
+            print(json.dumps({"status": "blocked", "reason": "provider_metadata_json_invalid", "detail": str(exc)}, indent=2))
+            return 1
+        if not isinstance(provider_metadata, dict):
+            print(json.dumps({"status": "blocked", "reason": "provider_metadata_json_must_be_an_object"}, indent=2))
+            return 1
+
     results = run_fixture_benchmark(FIXTURE_CASES, make_provider=make_provider, provider_name=provider_name, reviewer_adapter=reviewer_adapter, tmp_root=tmp_root, max_fix_attempts=args.max_fix_attempts)
-    scorecard = aggregate_scorecard(provider_name, results)
+    scorecard = aggregate_scorecard(provider_name, results, provider_metadata=provider_metadata)
 
     provider_specs = []
     if args.enable_openhands or args.enable_mini_swe_agent:
