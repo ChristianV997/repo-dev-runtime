@@ -111,6 +111,49 @@ def test_test_failure_requires_one_repair_iteration(tmp_path):
     assert result.test_result["status"] == "passed"
 
 
+def test_test_command_timeout_is_classified_distinctly(tmp_path, monkeypatch):
+    from repo_dev_runtime.eval import harness
+    from repo_dev_runtime.tools.runner import CommandResult
+
+    case = next(c for c in FIXTURE_CASES if c.fixture_id == "test_failure_requires_repair")
+
+    def fake_run_command(command, *, cwd, timeout_s=60.0, **kwargs):
+        return CommandResult(command=tuple(command), returncode=None, stdout="", stderr="", timed_out=True)
+
+    monkeypatch.setattr(harness, "run_command", fake_run_command)
+    result = run_fixture_case(case, make_provider=default_fake_provider_factory, provider_name="fake", tmp_root=tmp_path, max_fix_attempts=1)
+
+    assert result.outcome == "test_failure"
+    assert result.error_type == "timeout"
+    assert result.test_result["status"] == "timed_out"
+
+    scorecard = aggregate_scorecard("fake", [result])
+    assert scorecard.timeout_count == 1
+
+
+def test_provider_timeout_error_type_is_counted(tmp_path):
+    from repo_dev_runtime.contracts.models import DevResult, RuntimeHealth
+
+    case = next(c for c in FIXTURE_CASES if c.fixture_id == "one_file_bugfix")
+
+    class TimingOutProvider:
+        name = "timing_out"
+
+        def health(self):
+            return RuntimeHealth(self.name, True, True)
+
+        def execute(self, task):
+            return DevResult(task_id=task.task_id, runtime=self.name, status="failed", error_type="TimeoutError")
+
+    result = run_fixture_case(case, make_provider=lambda c: TimingOutProvider(), provider_name="timing_out", tmp_root=tmp_path, max_fix_attempts=1)
+
+    assert result.outcome == "provider_failure"
+    assert result.error_type == "TimeoutError"
+
+    scorecard = aggregate_scorecard("timing_out", [result])
+    assert scorecard.timeout_count == 1
+
+
 def test_reviewer_should_reject_fixture(tmp_path):
     case = next(c for c in FIXTURE_CASES if c.fixture_id == "reviewer_should_reject")
     result = run_fixture_case(

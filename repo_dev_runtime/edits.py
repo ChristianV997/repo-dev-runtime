@@ -156,6 +156,11 @@ class AppliedPatch:
     after_hashes: Mapping[str, str]
 
 
+# Shared with eval/harness.py's worktree_escapes_detected/_FORBIDDEN_MARKERS
+# classification, so the two modules can't silently drift apart on wording.
+WORKTREE_ESCAPE_MESSAGE = "edit escapes worktree"
+
+
 class PatchApplier:
     def __init__(self, root: str | Path, *, allowed_paths: tuple[str, ...] = (), forbidden_paths: tuple[str, ...] = ()) -> None:
         self.root = Path(root).resolve()
@@ -166,7 +171,7 @@ class PatchApplier:
     def _resolve(self, relative: str) -> Path:
         path = (self.root / relative).resolve()
         if self.root not in path.parents:
-            raise PatchValidationError("edit escapes worktree")
+            raise PatchValidationError(WORKTREE_ESCAPE_MESSAGE)
         if self.allowed_paths and not any(relative == p or relative.startswith(p.rstrip("/") + "/") for p in self.allowed_paths):
             raise PatchValidationError(f"path is outside allowed_paths: {relative}")
         if any(part.lower() in self.forbidden_paths for part in PurePosixPath(relative).parts):

@@ -8,6 +8,13 @@ Loading is explicit and opt-in: a caller must name the exact
 provider here never registers it in ``runtimes.factory.default_registry``
 or any ``RoutingPolicy``, so a benchmarked provider still cannot reach
 default routing.
+
+Trust boundary: ``target`` is treated as trusted, operator-supplied input
+(a CLI flag value), not untrusted data. Importing an arbitrary Python
+module executes that module's top-level code — this is an accepted,
+intentional design choice for a plugin-loading mechanism aimed at an
+operator who already controls what runs on their own machine, not a gap
+to be closed with sandboxing here.
 """
 from __future__ import annotations
 

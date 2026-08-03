@@ -95,11 +95,15 @@ class PRAgentReviewAdapter:
         except OSError as exc:
             return EvalResult(request_id=request.request_id, provider=self.name, status="failed", error_type=type(exc).__name__, error_message=redact_text(str(exc)[:500]))
 
-        raw_stdout = redact_text(completed.stdout[: self.max_output_bytes])
+        # Measure and enforce the byte budget before anything else, and
+        # regardless of exit code — a failing subprocess with oversized
+        # stdout must still be classified output_limit, not bridge_exit.
+        stdout_bytes = completed.stdout.encode("utf-8", errors="replace")
+        if len(stdout_bytes) > self.max_output_bytes:
+            return EvalResult(request_id=request.request_id, provider=self.name, status="failed", error_type="output_limit")
+        raw_stdout = redact_text(completed.stdout)
         if completed.returncode != 0:
             return EvalResult(request_id=request.request_id, provider=self.name, status="failed", raw_output=raw_stdout, error_type="bridge_exit", error_message=f"exit code {completed.returncode}")
-        if len(completed.stdout.encode("utf-8")) > self.max_output_bytes:
-            return EvalResult(request_id=request.request_id, provider=self.name, status="failed", error_type="output_limit")
 
         try:
             verdict = parse_review_verdict(completed.stdout)
