@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 from typing import Sequence
@@ -19,6 +20,20 @@ from ..contracts.models import RuntimeHealth
 from ..governance.credentials import CredentialAllowlist, build_subprocess_env, missing_credential_result, redact_text
 from ..review import ReviewValidationError, parse_review_verdict
 from .models import EvalRequest, EvalResult
+
+
+def _parse_command_env() -> tuple[str, ...]:
+    """Parse ``PR_AGENT_COMMAND`` as either a JSON array or a shell-split
+    string. Mirrors the parsing already used by ``sensors/agent_reach.py``
+    so external-command configuration is consistent across bridges."""
+    value = os.getenv("PR_AGENT_COMMAND", "").strip()
+    if not value:
+        return ()
+    try:
+        loaded = json.loads(value)
+        return tuple(loaded) if isinstance(loaded, list) else tuple(shlex.split(value))
+    except json.JSONDecodeError:
+        return tuple(shlex.split(value, posix=os.name != "nt"))
 
 
 class PRAgentReviewAdapter:
@@ -31,11 +46,11 @@ class PRAgentReviewAdapter:
 
     name = "pr_agent"
 
-    def __init__(self, *, command: Sequence[str] | None = None, enabled: bool | None = None, max_output_bytes: int = 512_000, required_credential: str = "") -> None:
-        self.command = tuple(command) if command else ()
+    def __init__(self, *, command: Sequence[str] | None = None, enabled: bool | None = None, max_output_bytes: int = 512_000, required_credential: str | None = None) -> None:
+        self.command = tuple(command) if command else _parse_command_env()
         self.enabled = enabled if enabled is not None else os.getenv("DEV_RUNTIME_PR_AGENT", "false").lower() in {"1", "true", "yes", "on"}
         self.max_output_bytes = max(1_024, int(max_output_bytes))
-        self.required_credential = required_credential
+        self.required_credential = required_credential if required_credential is not None else os.getenv("PR_AGENT_REQUIRED_CREDENTIAL", "").strip()
 
     def health(self) -> RuntimeHealth:
         if not self.enabled or not self.command:

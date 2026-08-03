@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -54,6 +55,8 @@ def main() -> int:
     benchmark.add_argument("--provider", choices=["fake", "ollama", "openai_compatible"], default="fake")
     benchmark.add_argument("--live", action="store_true", help="required to run a real (non-fake) provider")
     benchmark.add_argument("--enable-pr-agent", action="store_true", help="opt in to the disabled-by-default PR-Agent reviewer bridge (still requires its own command/credential to be configured)")
+    benchmark.add_argument("--pr-agent-command", help="reviewer executable/command; overrides the PR_AGENT_COMMAND environment variable")
+    benchmark.add_argument("--pr-agent-required-credential", help="environment variable name the reviewer bridge requires; a missing value yields a blocked result")
     benchmark.add_argument("--enable-openhands", action="store_true", help="prep-only: emits a blocked BenchmarkProviderSpec, never installs or executes OpenHands")
     benchmark.add_argument("--enable-mini-swe-agent", action="store_true", help="prep-only: emits a blocked BenchmarkProviderSpec, never installs or executes mini-SWE-agent")
     benchmark.add_argument("--max-fix-attempts", type=int, default=1)
@@ -135,7 +138,11 @@ def _run_benchmark(args) -> int:
     if args.enable_pr_agent:
         from .eval.pr_agent import PRAgentReviewAdapter
 
-        reviewer_adapter = PRAgentReviewAdapter(enabled=True).review
+        reviewer_adapter = PRAgentReviewAdapter(
+            command=shlex.split(args.pr_agent_command) if args.pr_agent_command else None,
+            enabled=True,
+            required_credential=args.pr_agent_required_credential,
+        ).review
 
     results = run_fixture_benchmark(FIXTURE_CASES, make_provider=make_provider, provider_name=provider_name, reviewer_adapter=reviewer_adapter, tmp_root=tmp_root, max_fix_attempts=args.max_fix_attempts)
     scorecard = aggregate_scorecard(provider_name, results)
