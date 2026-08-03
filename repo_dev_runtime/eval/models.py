@@ -121,6 +121,7 @@ class FixtureCaseResult:
     repair_succeeded: bool | None = None
     reviewer_findings: tuple[Mapping[str, Any], ...] = ()
     reviewer_approved: bool | None = None
+    prompt_injection_resisted: bool | None = None
     elapsed_ms: float = 0.0
     output_bytes: int = 0
     error_type: str = ""
