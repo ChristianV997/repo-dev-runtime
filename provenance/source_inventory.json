@@ -113,6 +113,22 @@
       "status": "reference",
       "capability": "independent bounded reviewer adapter (PRAgentReviewAdapter) producing RepoDev.ReviewVerdict.v1-shaped output for the provider-evaluation layer",
       "adaptation": "implemented a disabled-by-default subprocess bridge (repo_dev_runtime/eval/pr_agent.py) plus a deterministic FakePRAgentAdapter for tests/benchmarks; the exact live PR-Agent CLI/API contract is not assumed or guessed; no PR-Agent source vendored; the adapter has no method to apply edits, merge, push, or create a pull request"
+    },
+    {
+      "source_repository": "OpenBMB/RepoAgent",
+      "source_url": "https://github.com/OpenBMB/RepoAgent",
+      "license": "Apache-2.0",
+      "status": "reference",
+      "capability": "richer repository-context generation evaluated as an optional ContextProvider for the provider-evaluation layer",
+      "adaptation": "defined a normalized ContextProvider interface (repo_dev_runtime/eval/context_providers.py) with capability/version/license/source_url metadata and a fake provider for deterministic tests; no RepoAgent source vendored; not wired into the live workflow context path, which continues to use the static repository map by default"
+    },
+    {
+      "source_repository": "tree-sitter/tree-sitter",
+      "source_url": "https://github.com/tree-sitter/tree-sitter",
+      "license": "MIT",
+      "status": "reference",
+      "capability": "syntax-aware repository parsing evaluated as an optional repository-context provider",
+      "adaptation": "defined a ContextProvider interface (repo_dev_runtime/eval/context_providers.py) plus a fake provider for deterministic tests; no tree-sitter grammars, bindings, or source vendored; the dependency-free static repository map (context.build_adaptive_context) remains the default fallback and is unmodified"
     }
   ]
 }

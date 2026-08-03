@@ -112,3 +112,37 @@ class FakePRAgentAdapter:
             status="succeeded",
             normalized={"approved": self.approved, "summary": "fake reviewer verdict", "findings": list(self.findings)},
         )
+
+
+class _FakeContextProvider:
+    """Base for deterministic fake context providers used in tests/
+    benchmarks only — never wired into the live workflow context path."""
+
+    name = "fake_context_provider"
+    _capabilities: Mapping[str, Any] = {}
+    _should_fail: bool = False
+
+    def capabilities(self) -> Mapping[str, Any]:
+        return dict(self._capabilities)
+
+    def build(self, root, *, objective, allowed_paths, forbidden_paths, max_bytes):
+        if self._should_fail:
+            raise RuntimeError(f"{self.name} is unavailable")
+        map_text = f"# {self.name} map for {objective}\n"
+        return map_text + "\n(fake context body)\n", map_text
+
+
+class FakeRepoAgentContextProvider(_FakeContextProvider):
+    name = "fake_repo_agent"
+    _capabilities = {"license": "Apache-2.0", "source_url": "https://github.com/OpenBMB/RepoAgent", "vendored": False, "version": "fake-0.0.0"}
+
+    def __init__(self, *, should_fail: bool = False) -> None:
+        self._should_fail = should_fail
+
+
+class FakeTreeSitterContextProvider(_FakeContextProvider):
+    name = "fake_tree_sitter"
+    _capabilities = {"license": "MIT", "source_url": "https://github.com/tree-sitter/tree-sitter", "vendored": False, "version": "fake-0.0.0"}
+
+    def __init__(self, *, should_fail: bool = False) -> None:
+        self._should_fail = should_fail
