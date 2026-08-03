@@ -82,16 +82,16 @@
       "source_url": "https://github.com/OpenBMB/RepoAgent",
       "license": "Apache-2.0",
       "status": "reference",
-      "capability": "repository structure and incremental architectural intelligence",
-      "adaptation": "adopted only the repository-intelligence direction; map remains lightweight, static, and dependency-free"
+      "capability": "repository structure and incremental architectural intelligence, later evaluated as an optional ContextProvider for the provider-evaluation layer",
+      "adaptation": "adopted only the repository-intelligence direction for the dependency-free static map; later defined a normalized ContextProvider interface (repo_dev_runtime/eval/context_providers.py) with capability/version/license/source_url metadata and a fake provider for deterministic tests; no RepoAgent source vendored; not wired into the live workflow context path, which continues to use the static repository map by default"
     },
     {
       "source_repository": "The-PRAgent/pr-agent",
       "source_url": "https://github.com/The-PRAgent/pr-agent",
       "license": "MIT",
       "status": "reference",
-      "capability": "structured review and context-aware pull request analysis",
-      "adaptation": "implemented a machine-readable reviewer verdict that gates promotion; no provider or webhook code copied"
+      "capability": "structured, context-aware review analysis, later evaluated as an independent bounded reviewer adapter for the provider-evaluation layer",
+      "adaptation": "implemented a machine-readable reviewer verdict schema (RepoDev.ReviewVerdict.v1) that gates promotion; later implemented a disabled-by-default subprocess bridge (repo_dev_runtime/eval/pr_agent.py) plus a deterministic FakePRAgentAdapter for tests/benchmarks; the exact live PR-Agent CLI/API contract is not assumed or guessed; no PR-Agent source vendored; the adapter has no method to apply edits, merge, push, or create a pull request"
     },
     {
       "source_repository": "cline/cline",
@@ -103,24 +103,9 @@
     },
     {
       "source_repository": "repo-dev-runtime-migration",
+      "status": "reviewed",
       "capability": "installable bootstrap scaffold (Serena config, Semgrep safety rules, session-handoff scripts, dev-stack capability checker, canonical-docs templates, AGENTS.md/CLAUDE.md policy) for stamping baseline AI dev-tooling into a target repository",
       "adaptation": "merged as repo_dev_runtime/scaffold/ (installer.py, config.py) plus a top-level templates/ and install.py, kept separate from the existing repo_dev_runtime package (the live multi-agent control plane) to avoid a namespace/responsibility collision; test imports updated to repo_dev_runtime.scaffold.installer"
-    },
-    {
-      "source_repository": "The-PRAgent/pr-agent",
-      "source_url": "https://github.com/The-PRAgent/pr-agent",
-      "license": "MIT",
-      "status": "reference",
-      "capability": "independent bounded reviewer adapter (PRAgentReviewAdapter) producing RepoDev.ReviewVerdict.v1-shaped output for the provider-evaluation layer",
-      "adaptation": "implemented a disabled-by-default subprocess bridge (repo_dev_runtime/eval/pr_agent.py) plus a deterministic FakePRAgentAdapter for tests/benchmarks; the exact live PR-Agent CLI/API contract is not assumed or guessed; no PR-Agent source vendored; the adapter has no method to apply edits, merge, push, or create a pull request"
-    },
-    {
-      "source_repository": "OpenBMB/RepoAgent",
-      "source_url": "https://github.com/OpenBMB/RepoAgent",
-      "license": "Apache-2.0",
-      "status": "reference",
-      "capability": "richer repository-context generation evaluated as an optional ContextProvider for the provider-evaluation layer",
-      "adaptation": "defined a normalized ContextProvider interface (repo_dev_runtime/eval/context_providers.py) with capability/version/license/source_url metadata and a fake provider for deterministic tests; no RepoAgent source vendored; not wired into the live workflow context path, which continues to use the static repository map by default"
     },
     {
       "source_repository": "tree-sitter/tree-sitter",
