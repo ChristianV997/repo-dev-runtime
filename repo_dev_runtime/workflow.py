@@ -47,6 +47,11 @@ class DevelopmentWorkflow:
             raise ValueError("apply_edits requires a live disposable worktree")
         if not 0 <= max_fix_attempts <= 3:
             raise ValueError("max_fix_attempts must be between 0 and 3")
+        # A consumer manifest may request network-capable quality commands,
+        # but it can never elevate a runtime policy that denies networking.
+        # Dry runs do not execute commands, so they remain available offline.
+        if not dry_run and self.manifest.network_access:
+            self.policy.authorize("network")
         run_id = run_id or uuid.uuid4().hex
         run_dir = self.artifacts_root / run_id
         if resume and not run_dir.exists():
@@ -156,7 +161,7 @@ class DevelopmentWorkflow:
                     WorktreeManager(self.manifest.root).remove(worktree)
                 return WorkflowResult(run_id, "blocked", tuple(results), str(run_dir))
             previous.append(task.task_id)
-        quality = run_quality_checks(self.manifest, cwd=worktree_path, dry_run=dry_run)
+        quality = run_quality_checks(self.manifest, cwd=worktree_path, dry_run=dry_run, policy=self.policy)
         repairs_applied = False
         for attempt in range(max_fix_attempts):
             if quality["status"] == "passed":
@@ -184,7 +189,7 @@ class DevelopmentWorkflow:
             except (PatchValidationError, ReviewValidationError, UnicodeDecodeError) as exc:
                 envelope.event("repair_rejected", task_id=result.task_id, attempt=attempt + 1, error_type=type(exc).__name__)
                 break
-            quality = run_quality_checks(self.manifest, cwd=worktree_path, dry_run=False)
+            quality = run_quality_checks(self.manifest, cwd=worktree_path, dry_run=False, policy=self.policy)
         if repairs_applied and quality["status"] == "passed":
             review_task_id = uuid.uuid4().hex
             review_prompt = f"Role: reviewer\nReturn only RepoDev.ReviewVerdict.v1 JSON with approved, summary, and findings. Review the final worktree diff after repair proposals and the passed quality result.\n\nObjective:\n{prompt}\n\nQuality:\n{json.dumps(quality, sort_keys=True)[:8000]}"
@@ -230,12 +235,25 @@ class DevelopmentWorkflow:
         return WorkflowResult(run_id, "ready_for_human_review", tuple(results), str(run_dir))
 
 
-def run_tests(manifest: RepoManifest, *, timeout_s: float = 120.0) -> dict[str, object]:
-    result = run_command(manifest.test_command, cwd=manifest.root, timeout_s=timeout_s, network_access=manifest.network_access)
+def _network_access_allowed(manifest: RepoManifest, policy: RuntimePolicy | None) -> bool:
+    """Return network authority only when both manifest and policy allow it."""
+    if not manifest.network_access or policy is None:
+        return False
+    policy.authorize("network")
+    return True
+
+
+def run_tests(manifest: RepoManifest, *, timeout_s: float = 120.0, policy: RuntimePolicy | None = None) -> dict[str, object]:
+    result = run_command(
+        manifest.test_command,
+        cwd=manifest.root,
+        timeout_s=timeout_s,
+        network_access=_network_access_allowed(manifest, policy),
+    )
     return {"command": list(result.command), "returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr, "timed_out": result.timed_out}
 
 
-def run_quality_checks(manifest: RepoManifest, *, cwd: str, dry_run: bool) -> dict[str, object]:
+def run_quality_checks(manifest: RepoManifest, *, cwd: str, dry_run: bool, policy: RuntimePolicy | None = None) -> dict[str, object]:
     """Run every manifest-declared check and fail closed on any non-zero result."""
     commands = [
         ("tests", manifest.test_command),
@@ -252,7 +270,12 @@ def run_quality_checks(manifest: RepoManifest, *, cwd: str, dry_run: bool) -> di
             checks[name] = {"status": "dry_run", "command": list(command)}
             continue
         try:
-            result = run_command(command, cwd=cwd, timeout_s=manifest.check_timeout_s, network_access=manifest.network_access)
+            result = run_command(
+                command,
+                cwd=cwd,
+                timeout_s=manifest.check_timeout_s,
+                network_access=_network_access_allowed(manifest, policy),
+            )
             item = {"status": "passed" if result.returncode == 0 and not result.timed_out else "failed", "command": list(command), "returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr, "timed_out": result.timed_out}
         except Exception as exc:
             item = {"status": "failed", "command": list(command), "error_type": type(exc).__name__, "error_message": str(exc)[:500]}

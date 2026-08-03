@@ -2,10 +2,12 @@ import subprocess
 import json
 import re
 
+import pytest
+
 from repo_dev_runtime.governance.policy import RuntimePolicy
 from repo_dev_runtime.manifest import RepoManifest
 from repo_dev_runtime.tools.runner import run_command
-from repo_dev_runtime.workflow import DevelopmentWorkflow
+from repo_dev_runtime.workflow import DevelopmentWorkflow, run_quality_checks
 from repo_dev_runtime.contracts.models import DevResult
 
 
@@ -60,6 +62,25 @@ def test_runner_blocks_repository_mutation(tmp_path):
         pass
     else:
         raise AssertionError("repository mutation should be blocked")
+
+
+def test_manifest_cannot_elevate_network_policy(tmp_path):
+    manifest = RepoManifest(
+        name="fixture",
+        root=str(tmp_path),
+        network_access=True,
+        test_command=("curl", "https://example.com"),
+    )
+
+    with pytest.raises(PermissionError, match="network access"):
+        DevelopmentWorkflow(manifest=manifest, policy=RuntimePolicy(), runtime=FakeRuntime()).run(
+            prompt="network-enabled test",
+            dry_run=False,
+        )
+
+    checks = run_quality_checks(manifest, cwd=str(tmp_path), dry_run=False, policy=RuntimePolicy())
+    assert checks["status"] == "failed"
+    assert checks["checks"]["tests"]["error_type"] == "PermissionError"
 
 
 def test_five_role_workflow_writes_envelope(tmp_path):
