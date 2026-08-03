@@ -7,7 +7,14 @@ from repo_dev_runtime.eval.fakes import default_fake_provider_factory
 from repo_dev_runtime.eval.fixtures import FIXTURE_CASES
 from repo_dev_runtime.eval.harness import aggregate_scorecard, run_fixture_benchmark
 from repo_dev_runtime.eval.provider_specs import default_provider_specs
-from repo_dev_runtime.eval.report import render_json_report, render_json_report_text, render_markdown_report
+from repo_dev_runtime.eval.report import (
+    append_history,
+    default_history_path,
+    render_comparison_table,
+    render_json_report,
+    render_json_report_text,
+    render_markdown_report,
+)
 
 
 def _fake_reviewer_reject(request):
@@ -69,6 +76,61 @@ def test_markdown_report_restates_governance_guarantees(tmp_path):
     assert "never part of default routing" in markdown
     assert "fake" in markdown
     assert "one_file_bugfix" in markdown
+
+
+def test_comparison_table_has_one_column_per_provider_and_no_aggregate_score():
+    from repo_dev_runtime.eval.models import ProviderScorecard
+
+    a = ProviderScorecard(provider="provider_a", tasks_attempted=7, tasks_completed=5)
+    b = ProviderScorecard(provider="provider_b", tasks_attempted=7, tasks_completed=3)
+    table = render_comparison_table([a, b])
+
+    assert "| metric | provider_a | provider_b |" in table
+    assert "| completed | 5 | 3 |" in table
+    # never collapse providers into a single ranked number
+    assert "score" not in table.lower()
+    assert "rank" not in table.lower()
+
+
+def test_comparison_table_empty_for_no_scorecards():
+    assert render_comparison_table([]) == ""
+
+
+def test_markdown_report_includes_comparison_only_for_multiple_providers(tmp_path):
+    from repo_dev_runtime.eval.models import ProviderScorecard
+
+    results, scorecard = _build_results(tmp_path)
+
+    single = render_markdown_report(scorecards=[scorecard], fixture_results=results)
+    assert "Provider comparison" not in single
+
+    other = ProviderScorecard(provider="other_provider")
+    multiple = render_markdown_report(scorecards=[scorecard, other], fixture_results=results)
+    assert "Provider comparison" in multiple
+    assert "other_provider" in multiple
+
+
+def test_append_history_is_append_only(tmp_path):
+    from repo_dev_runtime.eval.models import ProviderScorecard
+
+    history = tmp_path / "history.jsonl"
+    first = render_json_report(scorecards=[ProviderScorecard(provider="first")], fixture_results=[])
+    second = render_json_report(scorecards=[ProviderScorecard(provider="second")], fixture_results=[])
+
+    append_history(first, path=history)
+    append_history(second, path=history)
+
+    lines = history.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[0])["scorecards"][0]["provider"] == "first"
+    assert json.loads(lines[1])["scorecards"][0]["provider"] == "second"
+
+
+def test_default_history_path_is_outside_any_repository():
+    path = default_history_path()
+    assert path.is_absolute()
+    assert ".repo-dev-runtime" in path.parts
+    assert path.suffix == ".jsonl"
 
 
 def test_report_generation_is_deterministic_given_same_inputs(tmp_path_factory):

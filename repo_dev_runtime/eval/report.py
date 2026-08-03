@@ -4,7 +4,8 @@ redacted defensively even though upstream results should already be
 credential-free."""
 from __future__ import annotations
 
-import json
+from datetime import date
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ..contracts.models import canonical_json
@@ -31,6 +32,49 @@ def render_json_report_text(**kwargs: Any) -> str:
     return canonical_json(render_json_report(**kwargs))
 
 
+# (metric label, scorecard attribute) pairs for the comparison table.
+# Deliberately no aggregate/ranking column: providers are compared metric
+# by metric, never collapsed into one number.
+_COMPARISON_METRICS: tuple[tuple[str, str], ...] = (
+    ("health check", "health_check_success"),
+    ("attempted", "tasks_attempted"),
+    ("completed", "tasks_completed"),
+    ("safely rejected", "tasks_safely_rejected"),
+    ("provider failures", "tasks_failed_provider"),
+    ("policy blocked", "tasks_blocked_by_policy"),
+    ("structured output valid", "structured_output_valid_count"),
+    ("structured output invalid", "structured_output_invalid_count"),
+    ("path policy violations", "path_policy_violations"),
+    ("worktree escapes", "worktree_escapes_detected"),
+    ("tests passed", "test_pass_count"),
+    ("tests failed", "test_fail_count"),
+    ("repair attempts", "repair_loop_attempts"),
+    ("repair successes", "repair_loop_successes"),
+    ("reviewer agreement", "reviewer_agreement_count"),
+    ("reviewer disagreement", "reviewer_disagreement_count"),
+    ("timeouts", "timeout_count"),
+    ("output size violations", "output_size_violations"),
+    ("credential leak detected", "credential_leak_detected"),
+    ("prompt injection resisted", "prompt_injection_resisted"),
+)
+
+
+def render_comparison_table(scorecards: Sequence[ProviderScorecard]) -> str:
+    """One row per metric, one column per provider. No aggregate score and
+    no ranking — an adoption decision reads the individual metrics."""
+    if not scorecards:
+        return ""
+    providers = [s.provider for s in scorecards]
+    lines = [
+        "| metric | " + " | ".join(providers) + " |",
+        "|---|" + "---|" * len(providers),
+    ]
+    for label, attribute in _COMPARISON_METRICS:
+        cells = [str(getattr(s, attribute)) for s in scorecards]
+        lines.append(f"| {label} | " + " | ".join(cells) + " |")
+    return "\n".join(lines) + "\n"
+
+
 def render_markdown_report(
     *,
     scorecards: Sequence[ProviderScorecard],
@@ -38,6 +82,10 @@ def render_markdown_report(
     provider_specs: Sequence[BenchmarkProviderSpec] = (),
 ) -> str:
     lines = ["# Provider Benchmark Report", ""]
+    if len(scorecards) > 1:
+        lines.append("## Provider comparison")
+        lines.append("")
+        lines.append(render_comparison_table(scorecards))
     for scorecard in scorecards:
         lines.append(f"## {scorecard.provider}")
         lines.append("")
@@ -80,3 +128,19 @@ def render_markdown_report(
     lines.append("- External providers are opt-in and credential-free by default.")
     lines.append("- OpenHands and mini-SWE-agent are evaluation records only and are never part of default routing.")
     return "\n".join(lines) + "\n"
+
+
+def default_history_path() -> Path:
+    """Append-only benchmark history, kept outside any consumer repository —
+    mirrors the existing ``~/.repo-dev-runtime/runs/`` convention."""
+    return Path.home() / ".repo-dev-runtime" / "eval-history" / f"{date.today().isoformat()}.jsonl"
+
+
+def append_history(report: Mapping[str, Any], *, path: str | Path | None = None) -> Path:
+    """Append one benchmark report as a single JSONL line. Never rewrites
+    or truncates prior runs."""
+    destination = Path(path) if path else default_history_path()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("a", encoding="utf-8") as handle:
+        handle.write(canonical_json(report) + "\n")
+    return destination

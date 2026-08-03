@@ -22,7 +22,7 @@ from .eval.fixtures import FIXTURE_CASES
 from .eval.harness import aggregate_scorecard, run_fixture_benchmark
 from .eval.loader import ProviderLoadError, load_provider
 from .eval.provider_specs import default_provider_specs
-from .eval.report import render_json_report, render_markdown_report
+from .eval.report import append_history, render_json_report, render_markdown_report
 
 
 def main() -> int:
@@ -66,6 +66,7 @@ def main() -> int:
     benchmark.add_argument("--max-fix-attempts", type=int, default=1)
     benchmark.add_argument("--json-out")
     benchmark.add_argument("--markdown-out")
+    benchmark.add_argument("--history-out", nargs="?", const="", help="append this run's JSON report as one JSONL line; defaults to ~/.repo-dev-runtime/eval-history/<date>.jsonl when given without a value")
     args = parser.parse_args()
     if args.command == "probe":
         root = Path(args.path).resolve()
@@ -199,6 +200,8 @@ def _run_benchmark(args) -> int:
         print(json.dumps(json_report, indent=2))
     if args.markdown_out:
         Path(args.markdown_out).write_text(markdown_report, encoding="utf-8")
+    if args.history_out is not None:
+        append_history(json_report, path=args.history_out or None)
     return 0
 
 
