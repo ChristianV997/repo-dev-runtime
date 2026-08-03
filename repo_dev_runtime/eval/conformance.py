@@ -14,6 +14,7 @@ test framework without depending on one.
 from __future__ import annotations
 
 import uuid
+import subprocess
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -102,6 +103,41 @@ def assert_development_runtime_contract(
     assert result.task_id == task.task_id, f"{label}.execute() must echo the task_id it was given"
 
 
+def assert_disabled_runtime_contract(
+    make_provider: Callable[[], Any],
+    *,
+    repository: str | Path,
+    label: str = "provider",
+) -> None:
+    """Verify a disabled runtime cannot mutate its supplied checkout.
+
+    This is intentionally separate from the general runtime contract: a
+    provider may be structurally valid while its disabled state is unsafe.
+    The check uses Git status before and after a dry-run probe and never
+    authorizes or invokes an external provider.
+    """
+    provider = make_provider()
+    assert isinstance(getattr(provider, "name", None), str) and provider.name, f"{label} must expose a non-empty .name"
+    before = _git_status(repository)
+    task = DevTask(
+        task_id=uuid.uuid4().hex,
+        repository=str(repository),
+        base_ref="HEAD",
+        role="implementer",
+        prompt="Conformance disabled-state probe.",
+        dry_run=True,
+    )
+    task.validate()
+    try:
+        result = provider.execute(task)
+    except Exception as exc:  # noqa: BLE001 - disabled providers must not escape
+        raise AssertionError(f"{label}.execute() raised while disabled") from exc
+    assert isinstance(result, DevResult), f"{label}.execute() must return a DevResult while disabled"
+    result.validate()
+    assert result.status in {"skipped", "blocked"}, f"{label} did not fail closed while disabled"
+    assert _git_status(repository) == before, f"{label} mutated the checkout while disabled"
+
+
 def assert_reviewer_contract(
     review: Callable[[EvalRequest], EvalResult],
     *,
@@ -174,3 +210,14 @@ def assert_forbidden_path_respected(
     )
     assert forbidden_segment not in text, f"{label} surfaced forbidden path {forbidden_segment!r} in its context"
     assert forbidden_segment not in map_text, f"{label} surfaced forbidden path {forbidden_segment!r} in its map"
+
+
+def _git_status(root: str | Path) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(Path(root).resolve()), "status", "--porcelain", "--untracked-files=all"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout

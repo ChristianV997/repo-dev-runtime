@@ -15,6 +15,7 @@ copy of the checks from drifting into the codebase.
 | Function | Verifies |
 |---|---|
 | `assert_development_runtime_contract(make_provider, repository=...)` | `name`/`health()`/`execute()` present, `RuntimeHealth` shape, `execute()` returns a valid `DevResult` echoing the task id, and **never raises** |
+| `assert_disabled_runtime_contract(make_provider, repository=...)` | Disabled execution returns `skipped`/`blocked` and leaves the Git checkout byte-for-byte unchanged |
 | `assert_reviewer_contract(review, ...)` | Returns a valid `EvalResult`, echoes the request id, normalizes into a boolean `approved` on success, and **fails closed** (no normalized verdict on a non-succeeded result) |
 | `assert_context_provider_contract(provider, root=...)` | `capabilities()` declares `vendored`, `build()` returns the `(full_context_text, map_text)` 2-tuple matching `context.build_adaptive_context`, and respects the `max_bytes` budget |
 | `assert_forbidden_path_respected(provider, root=..., forbidden_segment=...)` | A context provider does not surface content from a forbidden path |
