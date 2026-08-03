@@ -111,8 +111,31 @@ class DevelopmentWorkflow:
                     result = DevResult(result.task_id, result.runtime, result.status, result.output, applied.changed_files, result.commit_sha, result.tests, result.telemetry)
                     envelope.event("proposal_applied", task_id=result.task_id, proposal_hash=proposal.proposal_hash, changed_files=list(applied.changed_files))
                 except (PatchValidationError, UnicodeDecodeError) as exc:
-                    result = DevResult(result.task_id, result.runtime, "blocked", result.output, error_type=type(exc).__name__, error_message=str(exc))
                     envelope.event("proposal_rejected", task_id=result.task_id, error_type=type(exc).__name__)
+                    repaired = False
+                    for repair_attempt in range(max_fix_attempts):
+                        repair_task_id = uuid.uuid4().hex
+                        repair_head = subprocess.check_output(["git", "-C", worktree_path, "rev-parse", "HEAD"], text=True).strip()
+                        repair_prompt = f"Role: implementer\nReturn only valid JSON for RepoDev.EditProposal.v1. Repair the malformed proposal. task_id={repair_task_id}; base_commit={repair_head}; context_hash={context_hash}. Required fields: proposal_id, task_id, base_commit, context_hash, summary, edits. Each edit requires path, format, and format-specific fields.\n\nValidation error: {str(exc)[:500]}\nMalformed response:\n{result.output[:3000]}"
+                        repair_task = DevTask(task_id=repair_task_id, repository=worktree_path, base_ref=base_ref, role="implementer", prompt=repair_prompt, acceptance=("return a valid repair proposal",), allowed_paths=self.manifest.allowed_paths, dry_run=False)
+                        repair_task.validate()
+                        candidate = self.runtime.execute(repair_task, approved=approved) if isinstance(self.runtime, RuntimeRouter) else self.runtime.execute(repair_task)  # type: ignore[attr-defined]
+                        try:
+                            candidate_proposal = parse_edit_proposal(candidate.output)
+                            if candidate_proposal.task_id != repair_task.task_id:
+                                raise PatchValidationError("proposal task_id mismatch")
+                            candidate_applied = PatchApplier(worktree_path, allowed_paths=self.manifest.allowed_paths, forbidden_paths=self.manifest.forbidden_paths).apply(candidate_proposal, context_hash=context_hash)
+                            result = DevResult(candidate.task_id, candidate.runtime, "succeeded", candidate.output, candidate_applied.changed_files, telemetry=candidate.telemetry)
+                            envelope.write_json("proposal.json", candidate_proposal.to_dict())
+                            envelope.write_json("applied_patch.json", {"proposal_hash": candidate_applied.proposal_hash, "checkpoint_id": candidate_applied.checkpoint_id, "changed_files": list(candidate_applied.changed_files), "before_hashes": dict(candidate_applied.before_hashes), "after_hashes": dict(candidate_applied.after_hashes)})
+                            envelope.event("proposal_repaired", task_id=repair_task.task_id, attempt=repair_attempt + 1, changed_files=list(candidate_applied.changed_files))
+                            task = repair_task
+                            repaired = True
+                            break
+                        except (PatchValidationError, UnicodeDecodeError) as repair_exc:
+                            envelope.event("proposal_repair_rejected", task_id=repair_task.task_id, attempt=repair_attempt + 1, error_type=type(repair_exc).__name__)
+                    if not repaired:
+                        result = DevResult(result.task_id, result.runtime, "blocked", result.output, error_type=type(exc).__name__, error_message=str(exc))
             if apply_edits and role == "reviewer" and result.status == "succeeded":
                 try:
                     verdict = parse_review_verdict(result.output)

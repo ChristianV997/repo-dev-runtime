@@ -29,6 +29,18 @@ class ProposalRuntime:
         return DevResult(task.task_id, "fake", "succeeded", output=task.role)
 
 
+class MalformedThenRepairRuntime(ProposalRuntime):
+    def __init__(self):
+        self.implementer_calls = 0
+
+    def execute(self, task):
+        if task.role == "implementer":
+            self.implementer_calls += 1
+            if self.implementer_calls == 1:
+                return DevResult(task.task_id, "fake", "succeeded", output="not proposal json")
+        return super().execute(task)
+
+
 def test_runner_redacts_credentials_and_blocks_network(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "secret")
     result = run_command(["python", "-m", "pytest", "--version"], cwd=tmp_path)
@@ -73,3 +85,21 @@ def test_live_proposal_workflow_only_changes_disposable_worktree(tmp_path):
     assert (tmp_path / "src" / "app.py").read_text() == "value = 1\n"
     assert (tmp_path / "runs" / result.run_id / "proposal.json").exists()
     assert (tmp_path / "runs" / result.run_id / "review_verdict.json").exists()
+
+
+def test_malformed_proposal_uses_bounded_repair(tmp_path):
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "initial"], check=True)
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=("src",), test_command=("git", "status", "--short"))
+    runtime = MalformedThenRepairRuntime()
+    result = DevelopmentWorkflow(manifest=manifest, policy=RuntimePolicy(), runtime=runtime, artifacts_root=tmp_path / "runs").run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True, max_fix_attempts=1)
+    events = (tmp_path / "runs" / result.run_id / "events.jsonl").read_text()
+    assert result.status == "ready_for_human_review"
+    assert "proposal_rejected" in events and "proposal_repaired" in events
+    assert (tmp_path / "src" / "app.py").read_text() == "value = 1\n"
+    assert json.loads((tmp_path / "runs" / result.run_id / "applied_patch.json").read_text())["changed_files"] == ["src/app.py"]
