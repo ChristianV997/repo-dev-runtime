@@ -51,6 +51,11 @@ class DevelopmentWorkflow:
     def run(self, *, prompt: str, base_ref: str = "HEAD", dry_run: bool = True, run_id: str | None = None, resume: bool = False, approved: bool = False, publisher: GitHubPublisher | None = None, create_pr: bool = False, apply_edits: bool = False, max_fix_attempts: int = 0) -> WorkflowResult:
         if apply_edits and dry_run:
             raise ValueError("apply_edits requires a live disposable worktree")
+        if resume and not dry_run and apply_edits:
+            # Applied patches live only in a disposed worktree today. Reusing
+            # cached role results without replaying every validated patch would
+            # make a resumed run's evidence inconsistent with its checkout.
+            raise ValueError("live edit runs cannot resume until durable patch replay is implemented")
         if not 0 <= max_fix_attempts <= 3:
             raise ValueError("max_fix_attempts must be between 0 and 3")
         run_id = run_id or uuid.uuid4().hex

@@ -50,7 +50,10 @@ python -m repo_dev_runtime.cli run C:\path\to\repository `
   --live --enable-ollama
 ```
 
-Use `--resume --run-id <id>` to continue an interrupted run. Artifacts default
+Use `--resume --run-id <id>` to continue an interrupted inspection run. Live
+`--apply-edits` runs are intentionally not resumable yet: their disposable
+worktree is removed, and the runtime will not reuse cached results without a
+durable patch-replay record. Artifacts default
 to `%USERPROFILE%\.repo-dev-runtime\runs\<repository>` rather than modifying
 the consumer checkout. Paid runtimes require `--approve-paid` and explicit
 policy enablement. `--create-pr` additionally requires the consumer manifest to
