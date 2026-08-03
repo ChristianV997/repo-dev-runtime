@@ -26,7 +26,9 @@ class WorktreeManager:
         if self.root not in path.parents or path == self.repository:
             raise ValueError("worktree path must remain inside the configured worktree root")
         branch = f"repo-dev/{run_id}"
-        completed = subprocess.run(["git", "-C", str(self.repository), "worktree", "add", "-b", branch, str(path), base_ref], capture_output=True, text=True, check=False)
+        branch_exists = subprocess.run(["git", "-C", str(self.repository), "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], capture_output=True, text=True, check=False).returncode == 0
+        command = ["git", "-C", str(self.repository), "worktree", "add", str(path), branch] if branch_exists else ["git", "-C", str(self.repository), "worktree", "add", "-b", branch, str(path), base_ref]
+        completed = subprocess.run(command, capture_output=True, text=True, check=False)
         if completed.returncode != 0:
             raise RuntimeError(completed.stderr.strip()[:500] or "git worktree creation failed")
         return Worktree(path, branch, base_ref)

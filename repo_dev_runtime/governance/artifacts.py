@@ -23,6 +23,13 @@ class RunEnvelope:
     root: Path
     events: list[dict[str, Any]] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        event_path = self.root / "events.jsonl"
+        if not self.events and event_path.exists():
+            for line in event_path.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    self.events.append(json.loads(line))
+
     def event(self, name: str, **data: Any) -> None:
         sequence = len(self.events)
         event = {
