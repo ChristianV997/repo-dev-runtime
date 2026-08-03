@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sys
 
+from repo_dev_runtime.eval.conformance import assert_no_forbidden_capabilities, assert_reviewer_contract
 from repo_dev_runtime.eval.fakes import FakePRAgentAdapter
 from repo_dev_runtime.eval.models import EvalRequest
 from repo_dev_runtime.eval.pr_agent import PRAgentReviewAdapter
@@ -69,9 +70,15 @@ def test_valid_verdict_normalized_and_raw_kept_separately():
 
 
 def test_adapter_has_no_apply_merge_push_or_pr_capability():
-    adapter = PRAgentReviewAdapter(command=["pr-agent-cli"], enabled=True)
-    forbidden_names = {"apply", "apply_edits", "merge", "push", "create_pull_request", "create_pr", "publish_branch"}
-    assert not (forbidden_names & set(dir(adapter)))
+    # Delegates to the shared conformance kit so this boundary rule has a
+    # single definition that real adapters reuse.
+    assert_no_forbidden_capabilities(PRAgentReviewAdapter(command=["pr-agent-cli"], enabled=True), label="pr_agent")
+
+
+def test_real_adapter_satisfies_the_shared_reviewer_contract(monkeypatch):
+    monkeypatch.delenv("DEV_RUNTIME_PR_AGENT", raising=False)
+    monkeypatch.delenv("PR_AGENT_COMMAND", raising=False)
+    assert_reviewer_contract(PRAgentReviewAdapter().review, label="pr_agent")
 
 
 def test_command_configurable_via_pr_agent_command_env_shell_string(monkeypatch):

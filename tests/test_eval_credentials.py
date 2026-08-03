@@ -1,6 +1,7 @@
 """Tests for repo_dev_runtime.governance.credentials."""
 from __future__ import annotations
 
+from repo_dev_runtime.eval.conformance import assert_no_credential_leak
 from repo_dev_runtime.governance.credentials import (
     CredentialAllowlist,
     build_subprocess_env,
@@ -76,6 +77,12 @@ def test_missing_credential_result_is_blocked_not_raised():
     assert result["status"] == "blocked"
     assert result["error_type"] == "credential_missing"
     assert "PR_AGENT_TOKEN" in result["error_message"]
+
+
+def test_shared_leak_assertion_covers_strings_and_json():
+    # The same check real provider tests are expected to call.
+    assert_no_credential_leak("api_key: hunter2", secret="hunter2")
+    assert_no_credential_leak({"telemetry": {"api_key": "hunter2"}}, secret="hunter2")
 
 
 def test_run_command_redacts_leaked_secret_in_captured_output(tmp_path, monkeypatch):
