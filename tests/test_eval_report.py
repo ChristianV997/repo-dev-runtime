@@ -62,16 +62,21 @@ def test_report_generation_is_deterministic_given_same_inputs(tmp_path_factory):
     results1, scorecard1 = _build_results(tmp_path_factory.mktemp("a"))
     results2, scorecard2 = _build_results(tmp_path_factory.mktemp("b"))
 
+    def _normalize_fixture_result(item):
+        stable = {k: v for k, v in item.items() if k not in {"created_at", "before_git_head", "after_git_head", "elapsed_ms", "output_bytes", "raw_output_redacted", "test_result"}}
+        # test_result's stdout embeds pytest's own non-deterministic timing
+        # text ("1 passed in 0.01s"); only its outcome classification matters here.
+        if item.get("test_result"):
+            stable["test_result_status"] = item["test_result"].get("status")
+        return stable
+
     def _stable_shape(report):
         return (
             [
                 {k: v for k, v in item.items() if k not in {"created_at", "total_duration_ms", "total_output_bytes"}}
                 for item in report["scorecards"]
             ],
-            [
-                {k: v for k, v in item.items() if k not in {"created_at", "before_git_head", "after_git_head", "elapsed_ms", "output_bytes", "raw_output_redacted"}}
-                for item in report["fixture_results"]
-            ],
+            [_normalize_fixture_result(item) for item in report["fixture_results"]],
         )
 
     report1 = render_json_report(scorecards=[scorecard1], fixture_results=results1)
