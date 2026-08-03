@@ -56,3 +56,22 @@ the consumer checkout. Paid runtimes require `--approve-paid` and explicit
 policy enablement. `--create-pr` additionally requires the consumer manifest to
 allow PR creation and only publishes a generated `repo-dev/*` branch; merging
 is never automated.
+
+## Evaluating external coding-agent providers
+
+`repo_dev_runtime/eval/` is a separate, controlled benchmark layer for
+scoring external providers (coding agents, reviewer bridges,
+repository-context tools) without weakening the governance model above:
+
+```powershell
+python -m repo_dev_runtime.cli benchmark --provider fake
+python -m repo_dev_runtime.cli benchmark --provider ollama --live --enable-ollama
+```
+
+The default fake provider is deterministic and requires no network access
+or credentials. Real providers require `--live`; the reviewer bridge
+(`--enable-pr-agent`) and repository-context providers are opt-in and
+disabled by default. This benchmark never pushes, merges, or creates a
+pull request, and no provider evaluated here — including OpenHands and
+mini-SWE-agent, which are recorded only as blocked evaluation specs — is
+ever part of default runtime routing. See `docs/eval-layer-overview.md`.
