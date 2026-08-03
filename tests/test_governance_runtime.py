@@ -48,6 +48,15 @@ def test_event_hash_is_stable_for_same_event_shape(tmp_path):
     assert "created_at" in first.events[0]
 
 
+def test_event_log_continues_after_resume(tmp_path):
+    first = RunEnvelope("one", tmp_path / "one")
+    first.event("started")
+    resumed = RunEnvelope("one", tmp_path / "one")
+    resumed.event("continued")
+    lines = (tmp_path / "one" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    assert json.loads(lines[-1])["sequence"] == 1
+
+
 def test_diagnostics_are_bounded():
     result = actionable_output("\n".join(f"line-{i}" for i in range(100)), max_lines=3, max_chars=100)
     assert result.splitlines() == ["line-97", "line-98", "line-99"]
@@ -58,4 +67,3 @@ def test_consumer_validation_is_read_only(tmp_path):
     result = validate_consumer(tmp_path)
     assert not result["valid"]
     assert not (tmp_path / ".dev-runtime").exists()
-

@@ -20,7 +20,13 @@ class OpenAICompatibleRuntime:
         self.enabled = enabled if enabled is not None else os.getenv("DEV_OMNIROUTE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 
     def health(self) -> RuntimeHealth:
-        return RuntimeHealth(self.name, self.enabled, False, ("openai_chat_completions",), "reachability checked during execution")
+        if not self.enabled:
+            return RuntimeHealth(self.name, False, False, ("openai_chat_completions",), "runtime disabled")
+        try:
+            with urlopen(f"{self.base_url}/v1/models", timeout=0.75) as response:
+                return RuntimeHealth(self.name, True, response.status == 200, ("openai_chat_completions",))
+        except (HTTPError, URLError, TimeoutError, OSError) as exc:
+            return RuntimeHealth(self.name, True, False, ("openai_chat_completions",), type(exc).__name__)
 
     def execute(self, task: DevTask) -> DevResult:
         if not self.enabled:

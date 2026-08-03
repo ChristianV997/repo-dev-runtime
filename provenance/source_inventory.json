@@ -68,6 +68,38 @@
       "adaptation": "excluded from extraction",
       "status": "excluded",
       "excluded_reason": "raw/domain data must never enter the coding runtime"
+    },
+    {
+      "source_repository": "Aider-AI/aider",
+      "source_url": "https://github.com/Aider-AI/aider",
+      "license": "Apache-2.0",
+      "status": "reference",
+      "capability": "repository maps, focused context, reversible Git-oriented edits",
+      "adaptation": "implemented a read-only static repository map and bounded objective-ranked context; no Aider source code vendored"
+    },
+    {
+      "source_repository": "OpenBMB/RepoAgent",
+      "source_url": "https://github.com/OpenBMB/RepoAgent",
+      "license": "Apache-2.0",
+      "status": "reference",
+      "capability": "repository structure and incremental architectural intelligence",
+      "adaptation": "adopted only the repository-intelligence direction; map remains lightweight, static, and dependency-free"
+    },
+    {
+      "source_repository": "The-PRAgent/pr-agent",
+      "source_url": "https://github.com/The-PRAgent/pr-agent",
+      "license": "MIT",
+      "status": "reference",
+      "capability": "structured review and context-aware pull request analysis",
+      "adaptation": "implemented a machine-readable reviewer verdict that gates promotion; no provider or webhook code copied"
+    },
+    {
+      "source_repository": "cline/cline",
+      "source_url": "https://github.com/cline/cline",
+      "license": "Apache-2.0",
+      "status": "reference",
+      "capability": "plan/act separation and worktree-per-task autonomy",
+      "adaptation": "retained explicit opt-in edit application and disposable worktrees; no IDE integration copied"
     }
   ]
 }
