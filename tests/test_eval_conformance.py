@@ -9,6 +9,7 @@ import pytest
 from repo_dev_runtime.eval.conformance import (
     assert_context_provider_contract,
     assert_development_runtime_contract,
+    assert_disabled_runtime_contract,
     assert_forbidden_path_respected,
     assert_no_credential_leak,
     assert_no_forbidden_capabilities,
@@ -44,6 +45,26 @@ def test_development_runtime_contract_passes_for_a_conforming_provider(git_repo)
         lambda: FakeCodingProvider((ProviderTurn(kind="give_up"),)),
         repository=git_repo,
     )
+
+
+def test_disabled_runtime_contract_proves_ollama_cannot_mutate_checkout(git_repo):
+    from repo_dev_runtime.runtimes.ollama import OllamaRuntime
+
+    assert_disabled_runtime_contract(lambda: OllamaRuntime(enabled=False), repository=git_repo, label="ollama")
+
+
+def test_disabled_runtime_contract_rejects_a_provider_that_mutates(git_repo):
+    class MutatingDisabled:
+        name = "mutating-disabled"
+
+        def execute(self, task):
+            (git_repo / "unexpected.txt").write_text("mutation\n", encoding="utf-8")
+            from repo_dev_runtime.contracts.models import DevResult
+
+            return DevResult(task.task_id, self.name, "skipped")
+
+    with pytest.raises(AssertionError, match="mutated the checkout"):
+        assert_disabled_runtime_contract(MutatingDisabled, repository=git_repo)
 
 
 def test_development_runtime_contract_rejects_a_provider_that_raises(git_repo):
