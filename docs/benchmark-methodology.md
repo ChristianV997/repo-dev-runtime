@@ -96,7 +96,7 @@ defaulting fail-closed.
 `sensors/agent_reach.py`) run a single, fixed, operator-configured
 command — set once via an environment variable or constructor argument —
 rather than a dynamically-assembled shell string. `governance/command_policy.evaluate_command`'s
-substring-blocklist approach (`git push`, `rm -rf`, `curl`, etc.) is
+mutation blocklist (`git push`, `rm -rf`, etc.) and explicit network gate are
 designed for exactly that dynamic case, which is why `tools/runner.run_command`
 routes every manifest-declared test/lint/security command through it.
 A fixed, operator-approved command is a different threat model: the
