@@ -21,8 +21,11 @@ def test_provenance_inventory_is_valid():
 def test_command_policy_blocks_mutation_and_network():
     assert not evaluate_command("git push origin main").allowed
     assert not evaluate_command("curl https://example.com").allowed
+    assert evaluate_command("curl https://example.com", CommandPolicy(allow_network=True)).allowed
+    assert evaluate_command("Invoke-WebRequest https://example.com", CommandPolicy(allow_network=True)).allowed
     assert evaluate_command("git status").allowed
     assert evaluate_command("git push", CommandPolicy(allow_network=True)).allowed is False
+    assert evaluate_command("aws s3 cp local s3://bucket/path", CommandPolicy(allow_network=True)).allowed is False
 
 
 def test_roles_have_review_boundary():
