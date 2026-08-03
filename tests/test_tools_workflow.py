@@ -1,4 +1,6 @@
 import subprocess
+import json
+import re
 
 from repo_dev_runtime.governance.policy import RuntimePolicy
 from repo_dev_runtime.manifest import RepoManifest
@@ -9,6 +11,21 @@ from repo_dev_runtime.contracts.models import DevResult
 
 class FakeRuntime:
     def execute(self, task):
+        return DevResult(task.task_id, "fake", "succeeded", output=task.role)
+
+
+class ProposalRuntime:
+    def execute(self, task):
+        if task.role == "implementer":
+            base = re.search(r"base_commit=([0-9a-f]+)", task.prompt).group(1)
+            context = re.search(r"context_hash=([0-9a-f]+)", task.prompt).group(1)
+            return DevResult(task.task_id, "fake", "succeeded", output=json.dumps({
+                "schema": "RepoDev.EditProposal.v1", "proposal_id": "proposal-1", "task_id": task.task_id,
+                "base_commit": base, "context_hash": context, "summary": "change value",
+                "edits": [{"path": "src/app.py", "format": "search_replace", "search": "value = 1", "replace": "value = 2"}],
+            }))
+        if task.role == "reviewer":
+            return DevResult(task.task_id, "fake", "succeeded", output='{"schema":"RepoDev.ReviewVerdict.v1","approved":true,"summary":"safe","findings":[]}')
         return DevResult(task.task_id, "fake", "succeeded", output=task.role)
 
 
@@ -40,3 +57,19 @@ def test_five_role_workflow_writes_envelope(tmp_path):
     assert (tmp_path / "runs" / result.run_id / "promotion.json").exists()
     assert (tmp_path / "runs" / result.run_id / "checksums.json").exists()
     assert len(result.results) == 5
+
+
+def test_live_proposal_workflow_only_changes_disposable_worktree(tmp_path):
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "initial"], check=True)
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=("src",), test_command=("git", "status", "--short"))
+    result = DevelopmentWorkflow(manifest=manifest, policy=RuntimePolicy(), runtime=ProposalRuntime(), artifacts_root=tmp_path / "runs").run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True)
+    assert result.status == "ready_for_human_review"
+    assert (tmp_path / "src" / "app.py").read_text() == "value = 1\n"
+    assert (tmp_path / "runs" / result.run_id / "proposal.json").exists()
+    assert (tmp_path / "runs" / result.run_id / "review_verdict.json").exists()

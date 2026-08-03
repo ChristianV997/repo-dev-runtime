@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -117,6 +118,18 @@ class EditProposal:
     @property
     def proposal_hash(self) -> str:
         return sha256_json(self.to_dict())
+
+
+def parse_edit_proposal(output: str) -> EditProposal:
+    """Parse a model response only when it is one complete proposal object."""
+    text = output.strip()
+    if text.startswith("```") and text.endswith("```"):
+        text = text.split("\n", 1)[1].rsplit("\n", 1)[0]
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise PatchValidationError("implementer output is not valid proposal JSON") from exc
+    return EditProposal.from_dict(payload)
 
 
 def _git_head(root: Path) -> str:
