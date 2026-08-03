@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,7 +12,20 @@ import pytest
 
 from repo_dev_runtime.eval.fixtures import FIXTURE_CASES
 
-_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "check_benchmark_report.py"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_SCRIPT = _REPO_ROOT / "scripts" / "check_benchmark_report.py"
+
+
+def _subprocess_env() -> dict[str, str]:
+    """`python -m repo_dev_runtime.cli` resolves imports because `-m`
+    prepends the *subprocess's own cwd* to sys.path — inherited for free
+    here since subprocess.run defaults to the parent's cwd (the repo
+    root). Invoking scripts/check_benchmark_report.py directly does not
+    get that treatment: a bare `python script.py` only adds the script's
+    *own* directory (scripts/) to sys.path, never the repo root, so this
+    must not rely on an ambient PYTHONPATH some outer shell happened to
+    export — CI's `python -m pytest -q` step does not set one."""
+    return {**os.environ, "PYTHONPATH": str(_REPO_ROOT)}
 
 
 def _load_checker():
@@ -79,7 +93,10 @@ def test_script_runs_end_to_end_against_a_real_benchmark(tmp_path):
     )
     assert benchmark.returncode == 0, benchmark.stderr
 
-    check = subprocess.run([sys.executable, str(_SCRIPT), str(report_path)], capture_output=True, text=True, check=False)
+    check = subprocess.run(
+        [sys.executable, str(_SCRIPT), str(report_path)],
+        capture_output=True, text=True, check=False, env=_subprocess_env(),
+    )
     assert check.returncode == 0, check.stderr
     assert "7 fixtures matched" in check.stdout
 
