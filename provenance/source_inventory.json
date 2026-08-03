@@ -129,6 +129,22 @@
       "status": "reference",
       "capability": "syntax-aware repository parsing evaluated as an optional repository-context provider",
       "adaptation": "defined a ContextProvider interface (repo_dev_runtime/eval/context_providers.py) plus a fake provider for deterministic tests; no tree-sitter grammars, bindings, or source vendored; the dependency-free static repository map (context.build_adaptive_context) remains the default fallback and is unmodified"
+    },
+    {
+      "source_repository": "All-Hands-AI/OpenHands",
+      "source_url": "https://github.com/All-Hands-AI/OpenHands",
+      "license": "MIT",
+      "status": "reference",
+      "capability": "autonomous coding agent execution evaluated for benchmark comparison",
+      "adaptation": "produced a benchmark-provider specification only (eval/provider_specs.py: OPENHANDS_SPEC, evaluation_status=blocked); not installed, not vendored, not adopted as a runtime, not wired into runtimes/factory.py or runtimes/registry.py, and therefore never part of default routing"
+    },
+    {
+      "source_repository": "SWE-agent/mini-swe-agent",
+      "source_url": "https://github.com/SWE-agent/mini-swe-agent",
+      "license": "MIT",
+      "status": "reference",
+      "capability": "minimal autonomous coding-agent loop evaluated for benchmark comparison",
+      "adaptation": "produced a benchmark-provider specification only (eval/provider_specs.py: MINI_SWE_AGENT_SPEC, evaluation_status=blocked); not installed, not vendored, not adopted as a runtime, not wired into runtimes/factory.py or runtimes/registry.py, and therefore never part of default routing"
     }
   ]
 }
