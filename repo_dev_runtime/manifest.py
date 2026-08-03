@@ -21,6 +21,8 @@ class RepoManifest:
     agent_roles: tuple[str, ...] = ("planner", "implementer", "tester", "reviewer", "integrator")
     network_access: bool = False
     pull_request_creation: bool = False
+    check_timeout_s: float = 600.0
+    context_max_bytes: int = 4_096
 
     def validate(self) -> None:
         if self.schema != "RepoDev.Repository.v1":
@@ -29,6 +31,10 @@ class RepoManifest:
             raise ValueError("manifest name and root are required")
         if not self.test_command:
             raise ValueError("test_command must not be empty")
+        if not 1 <= float(self.check_timeout_s) <= 7_200:
+            raise ValueError("check_timeout_s is out of bounds")
+        if not 4_096 <= int(self.context_max_bytes) <= 200_000:
+            raise ValueError("context_max_bytes is out of bounds")
         valid_roles = {"planner", "implementer", "tester", "reviewer", "integrator"}
         if set(self.agent_roles) - valid_roles:
             raise ValueError("manifest contains an unsupported agent role")

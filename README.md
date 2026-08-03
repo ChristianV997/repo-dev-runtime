@@ -39,3 +39,20 @@ intentionally excluded.
 The runtime uses five bounded roles: planner, implementer, tester, reviewer,
 and integrator. The integrator can prepare a handoff but cannot merge or push.
 Scheduling is declarative and one-shot; no background daemon is implemented.
+
+## Live workflow
+
+Live orchestration is opt-in and provider health is checked before routing:
+
+```powershell
+python -m repo_dev_runtime.cli run C:\path\to\repository `
+  --prompt "Inspect the failing test and propose a minimal fix" `
+  --live --enable-ollama
+```
+
+Use `--resume --run-id <id>` to continue an interrupted run. Artifacts default
+to `%USERPROFILE%\.repo-dev-runtime\runs\<repository>` rather than modifying
+the consumer checkout. Paid runtimes require `--approve-paid` and explicit
+policy enablement. `--create-pr` additionally requires the consumer manifest to
+allow PR creation and only publishes a generated `repo-dev/*` branch; merging
+is never automated.

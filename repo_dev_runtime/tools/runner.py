@@ -20,10 +20,10 @@ class CommandResult:
     timed_out: bool = False
 
 
-def run_command(command: Sequence[str], *, cwd: str | Path, timeout_s: float = 120.0, max_output_bytes: int = 512_000, network_access: bool = False) -> CommandResult:
+def run_command(command: Sequence[str], *, cwd: str | Path, timeout_s: float = 120.0, max_output_bytes: int = 512_000, network_access: bool = False, allow_branch_publish: bool = False) -> CommandResult:
     if not command or any(not isinstance(item, str) or not item for item in command):
         raise ValueError("command must be a non-empty sequence of strings")
-    decision = evaluate_command(shlex.join(command), CommandPolicy(allow_network=network_access))
+    decision = evaluate_command(shlex.join(command), CommandPolicy(allow_network=network_access, allow_branch_publish=allow_branch_publish))
     if not decision.allowed:
         raise PermissionError(decision.reason)
     environment = {key: value for key, value in os.environ.items() if key not in {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"}}
