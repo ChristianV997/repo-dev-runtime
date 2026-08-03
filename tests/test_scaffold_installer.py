@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import re
+import os
+import pytest
 from pathlib import Path
 
 from repo_dev_runtime.scaffold.installer import DEFAULT_TEMPLATES_ROOT, install
@@ -126,3 +128,17 @@ def test_semgrep_template_has_no_marketos_paths():
     for literal in ("backend/", "connectors/", "orchestrator/", "marketos-"):
         assert literal not in active_lines, f"found leftover MarketOS-specific literal in active config: {literal}"
     assert "devstack-" in content
+
+
+def test_install_refuses_destination_symlink(tmp_path):
+    target = _make_target(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = target / "docs"
+    try:
+        os.symlink(outside, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is unavailable")
+    with pytest.raises(ValueError, match="symlink|escapes"):
+        install(target)
+    assert not list(outside.rglob("*"))

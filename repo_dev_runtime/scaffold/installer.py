@@ -81,6 +81,17 @@ def _default_confirm_overwrite(_path: Path) -> bool:
     return False
 
 
+def _safe_destination(target: Path, relative: str) -> Path:
+    """Resolve a template destination without following a link outside target."""
+    destination = target / relative
+    if destination.is_symlink():
+        raise ValueError(f"refusing to write through symlink: {relative}")
+    resolved = destination.resolve(strict=False)
+    if resolved != target and target not in resolved.parents:
+        raise ValueError(f"destination escapes target repository: {relative}")
+    return destination
+
+
 def install(
     target: Path,
     *,
@@ -105,7 +116,7 @@ def install(
 
     report = InstallReport(dry_run=dry_run)
     for source, dest_rel in discover_manifest(templates_root, with_tests=with_tests):
-        dest_path = target / dest_rel
+        dest_path = _safe_destination(target, dest_rel)
         raw = source.read_bytes()
         if source.suffix in TEXT_EXTENSIONS:
             content = substitute(raw.decode("utf-8"), tokens).encode("utf-8")
