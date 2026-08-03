@@ -123,6 +123,32 @@ def test_no_env_configuration_leaves_command_unset(monkeypatch):
     assert adapter.required_credential == ""
 
 
+def test_review_denied_when_policy_disallows_it():
+    from repo_dev_runtime.governance.policy import RuntimePolicy
+
+    adapter = PRAgentReviewAdapter(command=[sys.executable, "-c", "pass"], enabled=True, policy=RuntimePolicy())
+    result = adapter.review(_request())
+
+    assert result.status == "blocked"
+    assert result.error_type == "policy_denied"
+
+
+def test_review_succeeds_with_an_explicitly_authorized_policy():
+    from repo_dev_runtime.governance.policy import RuntimePolicy
+
+    script = (
+        "import json; print(json.dumps({'schema': 'RepoDev.ReviewVerdict.v1', "
+        "'approved': True, 'summary': 'ok', 'findings': []}))"
+    )
+    adapter = PRAgentReviewAdapter(
+        command=[sys.executable, "-c", script], enabled=True,
+        policy=RuntimePolicy(network_access=True, allow_external_provider_benchmark=True),
+    )
+    result = adapter.review(_request())
+
+    assert result.status == "succeeded"
+
+
 def test_fake_pr_agent_adapter_is_deterministic():
     adapter = FakePRAgentAdapter(approved=False, findings=[{"severity": "high", "path": "x.py", "message": "bad"}])
     result = adapter(_request())

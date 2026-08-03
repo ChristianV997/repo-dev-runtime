@@ -81,6 +81,23 @@ def test_externally_loaded_provider_runs_through_the_existing_harness(tmp_path):
     assert scorecard.tasks_completed == 1
 
 
+def test_load_provider_denies_when_policy_disallows_benchmarking():
+    from repo_dev_runtime.governance.policy import RuntimePolicy
+
+    with pytest.raises(ProviderLoadError, match="not authorized"):
+        load_provider(f"{_MODULE}:SampleExternalProvider", policy=RuntimePolicy())
+
+
+def test_load_provider_succeeds_with_an_explicitly_authorized_policy():
+    from repo_dev_runtime.governance.policy import RuntimePolicy
+
+    provider = load_provider(
+        f"{_MODULE}:SampleExternalProvider",
+        policy=RuntimePolicy(network_access=True, allow_external_provider_benchmark=True),
+    )
+    assert provider.name == "sample_external_provider"
+
+
 def test_loading_a_provider_does_not_register_it_in_default_routing():
     from repo_dev_runtime.runtimes.factory import default_registry
     from repo_dev_runtime.runtimes.registry import RoutingPolicy

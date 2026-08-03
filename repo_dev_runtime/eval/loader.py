@@ -14,6 +14,18 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
+from ..governance.policy import RuntimePolicy
+
+# Default policy for direct/programmatic callers that don't pass one
+# explicitly. Permissive by design: this is a defense-in-depth hook, not
+# the primary enforcement point — repo_dev_runtime.cli always constructs
+# and passes its own real, gated policy (requiring --live plus explicit
+# --approve-external-provider-benchmark) at every call site. A caller who
+# imports this module directly and doesn't pass a policy gets today's
+# behavior (no gate), as an explicit, documented choice rather than a
+# silent gap.
+_PERMISSIVE_DEFAULT_POLICY = RuntimePolicy(network_access=True, allow_external_provider_benchmark=True)
+
 
 class ProviderLoadError(ValueError):
     """Raised when a provider target cannot be imported, constructed, or
@@ -41,7 +53,7 @@ def implements_development_runtime(candidate: Any) -> bool:
     return callable(getattr(candidate, "health", None)) and callable(getattr(candidate, "execute", None))
 
 
-def load_provider(target: str) -> Any:
+def load_provider(target: str, *, policy: RuntimePolicy | None = None) -> Any:
     """Import and instantiate a provider from ``module:ClassName``.
 
     Construction convention, tried in order: a zero-argument
@@ -49,7 +61,19 @@ def load_provider(target: str) -> Any:
     constructor. Anything requiring configuration should expose
     ``create()`` and read its own environment, matching how the existing
     runtime adapters configure themselves.
+
+    ``policy`` gates the load itself, since importing an arbitrary module
+    executes that module's top-level code — the risky step is the import,
+    not just the later ``execute()`` call. Defaults to a permissive policy
+    for direct/programmatic callers (see module docstring); ``cli.py``
+    always passes its own real, gated policy explicitly.
     """
+    policy = policy or _PERMISSIVE_DEFAULT_POLICY
+    try:
+        policy.authorize("external_provider_benchmark", approved=True)
+    except PermissionError as exc:
+        raise ProviderLoadError(f"provider loading is not authorized: {exc}") from exc
+
     module_name, attribute = parse_target(target)
     try:
         module = importlib.import_module(module_name)

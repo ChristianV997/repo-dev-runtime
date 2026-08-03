@@ -74,3 +74,34 @@ collapsed into a pass/fail boolean.
 passed through `governance.credentials.redact_json`/`redact_text` before
 being returned, even though upstream results should already be
 credential-free.
+
+## Real-provider execution requires explicit approval
+
+Running a real coding provider (`--provider-module`, or `--provider
+ollama`/`openai_compatible`) and enabling the PR-Agent reviewer bridge
+(`--enable-pr-agent`) both require `--live` **and**
+`--approve-external-provider-benchmark`. The approval flag is checked
+against a freshly-constructed `RuntimePolicy` via `authorize(...,
+approved=...)` at each call site — `--live` alone is never sufficient.
+`eval/loader.load_provider` and `eval/pr_agent.PRAgentReviewAdapter` also
+accept an optional `policy` parameter for defense in depth; both default
+to an already-permissive policy for direct/programmatic callers who don't
+pass one, since `cli.py` is the primary enforcement point and this is a
+brand-new API with no external callers yet to protect against by
+defaulting fail-closed.
+
+## Why the PR-Agent bridge doesn't route through `command_policy`
+
+`eval/pr_agent.PRAgentReviewAdapter` (and its precedent,
+`sensors/agent_reach.py`) run a single, fixed, operator-configured
+command — set once via an environment variable or constructor argument —
+rather than a dynamically-assembled shell string. `governance/command_policy.evaluate_command`'s
+substring-blocklist approach (`git push`, `rm -rf`, `curl`, etc.) is
+designed for exactly that dynamic case, which is why `tools/runner.run_command`
+routes every manifest-declared test/lint/security command through it.
+A fixed, operator-approved command is a different threat model: the
+operator already chose what to run when they set `PR_AGENT_COMMAND`, the
+same way they choose what `AGENT_REACH_COMMAND` runs. This is a
+deliberate boundary, not an oversight — retrofitting substring policing
+onto a command the operator explicitly configured wouldn't add real
+protection and risks false positives on legitimate reviewer CLIs.
