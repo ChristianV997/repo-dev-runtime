@@ -17,7 +17,7 @@ from .runtimes.dry_run import DryRunRuntime
 from .governance.policy import RuntimePolicy
 from .workflow import DevelopmentWorkflow
 from .integrations.github import GitHubPublisher
-from .eval.fakes import default_fake_provider_factory
+from .eval.fakes import FakePRAgentAdapter, default_fake_provider_factory
 from .eval.fixtures import FIXTURE_CASES
 from .eval.harness import aggregate_scorecard, run_fixture_benchmark
 from .eval.loader import ProviderLoadError, load_provider
@@ -58,6 +58,7 @@ def main() -> int:
     benchmark.add_argument("--provider-name", help="scorecard name for --provider-module (defaults to the provider's own .name)")
     benchmark.add_argument("--live", action="store_true", help="required to run a real (non-fake) provider")
     benchmark.add_argument("--enable-pr-agent", action="store_true", help="opt in to the disabled-by-default PR-Agent reviewer bridge (still requires its own command/credential to be configured)")
+    benchmark.add_argument("--fake-reviewer", action="store_true", help="use a deterministic rejecting reviewer so the reviewer fixture is exercised without an external tool; contract testing only, never evidence about a real reviewer")
     benchmark.add_argument("--pr-agent-command", help="reviewer executable/command; overrides the PR_AGENT_COMMAND environment variable")
     benchmark.add_argument("--pr-agent-required-credential", help="environment variable name the reviewer bridge requires; a missing value yields a blocked result")
     benchmark.add_argument("--enable-openhands", action="store_true", help="prep-only: emits a blocked BenchmarkProviderSpec, never installs or executes OpenHands")
@@ -168,6 +169,11 @@ def _run_benchmark(args) -> int:
             enabled=True,
             required_credential=args.pr_agent_required_credential,
         ).review
+    elif args.fake_reviewer:
+        reviewer_adapter = FakePRAgentAdapter(
+            approved=False,
+            findings=[{"severity": "high", "path": "validator.py", "message": "removes required input validation"}],
+        )
 
     provider_metadata = {}
     if args.provider_metadata_json:
@@ -179,6 +185,13 @@ def _run_benchmark(args) -> int:
         if not isinstance(provider_metadata, dict):
             print(json.dumps({"status": "blocked", "reason": "provider_metadata_json_must_be_an_object"}, indent=2))
             return 1
+
+    # Record how this run was produced, so a synthetic run is never later
+    # mistaken for evidence about a real provider or a real reviewer.
+    provider_metadata = dict(provider_metadata) | {
+        "benchmark_kind": "synthetic" if not args.provider_module and args.provider == "fake" else "live_provider",
+        "reviewer_kind": "real" if args.enable_pr_agent else ("fake" if args.fake_reviewer else "none"),
+    }
 
     results = run_fixture_benchmark(FIXTURE_CASES, make_provider=make_provider, provider_name=provider_name, reviewer_adapter=reviewer_adapter, tmp_root=tmp_root, max_fix_attempts=args.max_fix_attempts)
     scorecard = aggregate_scorecard(provider_name, results, provider_metadata=provider_metadata)

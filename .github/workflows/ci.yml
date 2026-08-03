@@ -23,5 +23,16 @@ jobs:
         run: python -m pytest -q
       - name: Compile sources
         run: python -m compileall -q repo_dev_runtime tests
+      - name: Validate provenance inventory
+        run: python -m json.tool provenance/source_inventory.json > /dev/null
+      - name: Fixture benchmark regression gate
+        # Deterministic, offline, fake-provider only: no third-party agent is
+        # installed or executed in CI, and no live provider is contacted.
+        run: |
+          python -m repo_dev_runtime.cli benchmark \
+            --provider fake --fake-reviewer \
+            --fixtures-root "${RUNNER_TEMP}/benchmark-fixtures" \
+            --json-out "${RUNNER_TEMP}/benchmark.json"
+          python scripts/check_benchmark_report.py "${RUNNER_TEMP}/benchmark.json"
       - name: Check whitespace
         run: git diff --check
