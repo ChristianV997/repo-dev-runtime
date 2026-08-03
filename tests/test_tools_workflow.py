@@ -2,6 +2,8 @@ import subprocess
 import json
 import re
 
+import pytest
+
 from repo_dev_runtime.governance.policy import RuntimePolicy
 from repo_dev_runtime.manifest import RepoManifest
 from repo_dev_runtime.tools.runner import run_command
@@ -60,6 +62,18 @@ def test_runner_blocks_repository_mutation(tmp_path):
         pass
     else:
         raise AssertionError("repository mutation should be blocked")
+
+
+def test_live_edit_resume_fails_before_worktree_creation(tmp_path):
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=(".",))
+
+    with pytest.raises(ValueError, match="durable patch replay"):
+        DevelopmentWorkflow(manifest=manifest, policy=RuntimePolicy(), runtime=FakeRuntime()).run(
+            prompt="resume edit",
+            dry_run=False,
+            resume=True,
+            apply_edits=True,
+        )
 
 
 def test_five_role_workflow_writes_envelope(tmp_path):

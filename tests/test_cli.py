@@ -14,6 +14,20 @@ def test_cli_dry_run_is_provider_independent(tmp_path):
     assert json.loads(result.stdout)["status"] == "ready_for_human_review"
 
 
+def test_cli_blocks_live_edit_resume_without_running_a_provider(tmp_path):
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "repo_dev_runtime.cli", "run", str(tmp_path),
+            "--prompt", "resume edit", "--live", "--apply-edits", "--resume",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert json.loads(result.stdout)["reason"] == "live_edit_resume_not_supported"
+
+
 def test_cli_benchmark_defaults_to_fake_provider(tmp_path):
     result = subprocess.run(
         [sys.executable, "-m", "repo_dev_runtime.cli", "benchmark", "--fixtures-root", str(tmp_path)],
