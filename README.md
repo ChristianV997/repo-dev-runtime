@@ -64,9 +64,14 @@ scoring external providers (coding agents, reviewer bridges,
 repository-context tools) without weakening the governance model above:
 
 ```powershell
-python -m repo_dev_runtime.cli benchmark --provider fake
+python -m repo_dev_runtime.cli benchmark --provider fake --fake-reviewer
 python -m repo_dev_runtime.cli benchmark --provider ollama --live --enable-ollama
+python -m repo_dev_runtime.cli benchmark --provider-module my_package.my_module:MyRuntime --live
 ```
+
+Any provider implementing the `DevelopmentRuntime` protocol can be scored
+through `--provider-module` without changing this package; see
+`docs/provider-integration-guide.md`.
 
 The default fake provider is deterministic and requires no network access
 or credentials. Real providers require `--live`; the reviewer bridge
