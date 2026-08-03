@@ -44,6 +44,55 @@ def test_blocked_on_missing_required_credential(monkeypatch):
     assert "PR_AGENT_TOKEN" in result.error_message
 
 
+def test_oversized_output_on_success_is_classified_output_limit():
+    script = "print('x' * 2000)"
+    adapter = PRAgentReviewAdapter(command=[sys.executable, "-c", script], enabled=True, max_output_bytes=1_024)
+
+    result = adapter.review(_request())
+    assert result.status == "failed"
+    assert result.error_type == "output_limit"
+    assert result.raw_output == ""  # never persisted when oversized
+
+
+def test_oversized_output_on_failing_exit_is_still_classified_output_limit():
+    # Regression test: previously the output_limit check only ran when the
+    # subprocess exited 0, so a failing bridge with oversized stdout was
+    # misclassified as bridge_exit instead.
+    script = "import sys; print('x' * 2000); sys.exit(1)"
+    adapter = PRAgentReviewAdapter(command=[sys.executable, "-c", script], enabled=True, max_output_bytes=1_024)
+
+    result = adapter.review(_request())
+    assert result.status == "failed"
+    assert result.error_type == "output_limit"
+
+
+def test_bridge_exit_classified_when_output_is_within_budget():
+    script = "import sys; sys.exit(1)"
+    adapter = PRAgentReviewAdapter(command=[sys.executable, "-c", script], enabled=True)
+
+    result = adapter.review(_request())
+    assert result.status == "failed"
+    assert result.error_type == "bridge_exit"
+
+
+def test_subprocess_timeout_is_classified_failed_with_timeout_error_type():
+    script = "import time; time.sleep(5)"
+    adapter = PRAgentReviewAdapter(command=[sys.executable, "-c", script], enabled=True)
+    short_request = EvalRequest.create(kind="reviewer", objective="probe", diff="x", timeout_s=0.2)
+
+    result = adapter.review(short_request)
+    assert result.status == "failed"
+    assert result.error_type == "timeout"
+
+
+def test_os_error_launching_subprocess_is_classified_failed():
+    adapter = PRAgentReviewAdapter(command=["/this/binary/does/not/exist/anywhere"], enabled=True)
+
+    result = adapter.review(_request())
+    assert result.status == "failed"
+    assert result.error_type == "FileNotFoundError"
+
+
 def test_malformed_provider_output_fails_closed():
     script = "import sys; print('not valid json at all')"
     adapter = PRAgentReviewAdapter(command=[sys.executable, "-c", script], enabled=True)
@@ -121,6 +170,32 @@ def test_no_env_configuration_leaves_command_unset(monkeypatch):
 
     assert adapter.command == ()
     assert adapter.required_credential == ""
+
+
+def test_review_denied_when_policy_disallows_it():
+    from repo_dev_runtime.governance.policy import RuntimePolicy
+
+    adapter = PRAgentReviewAdapter(command=[sys.executable, "-c", "pass"], enabled=True, policy=RuntimePolicy())
+    result = adapter.review(_request())
+
+    assert result.status == "blocked"
+    assert result.error_type == "policy_denied"
+
+
+def test_review_succeeds_with_an_explicitly_authorized_policy():
+    from repo_dev_runtime.governance.policy import RuntimePolicy
+
+    script = (
+        "import json; print(json.dumps({'schema': 'RepoDev.ReviewVerdict.v1', "
+        "'approved': True, 'summary': 'ok', 'findings': []}))"
+    )
+    adapter = PRAgentReviewAdapter(
+        command=[sys.executable, "-c", script], enabled=True,
+        policy=RuntimePolicy(network_access=True, allow_external_provider_benchmark=True),
+    )
+    result = adapter.review(_request())
+
+    assert result.status == "succeeded"
 
 
 def test_fake_pr_agent_adapter_is_deterministic():

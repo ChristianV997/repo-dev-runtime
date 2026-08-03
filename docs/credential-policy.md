@@ -45,3 +45,17 @@ Nothing in this layer reads credentials from arbitrary files, config
 directories, or shell history. Every credential must arrive through the
 process environment, under a name the specific provider's allowlist
 explicitly names.
+
+## Redaction is heuristic, not content-based — a known limitation
+
+`redact_text`/`redact_json` catch secrets that appear next to a
+credential-shaped key name, in a `Bearer ...` header, or in a `label:
+value`/`label=value` line. A raw secret value with no such label — e.g.
+pasted into unrelated prose, or held in a field with an innocuous name —
+will **not** be redacted. This is a real, accepted limitation, not an
+oversight: `tests/test_eval_conformance.py::test_no_credential_leak_detects_an_unredactable_sentinel`
+exercises exactly this negative case so it stays documented rather than
+silently assumed. Callers that need certainty a specific secret never
+appears anywhere in output should scrub it at the source (e.g. never
+pass it into a provider's stdout-visible arguments) rather than relying
+on this redaction as a backstop.

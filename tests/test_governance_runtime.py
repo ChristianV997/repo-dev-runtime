@@ -76,6 +76,34 @@ def test_external_provider_benchmark_disabled_by_default():
         policy.authorize("external_provider_benchmark")
 
 
-def test_external_provider_benchmark_allowed_when_enabled():
-    policy = RuntimePolicy(allow_external_provider_benchmark=True)
-    policy.authorize("external_provider_benchmark")  # must not raise
+def test_external_provider_benchmark_allowed_when_enabled_and_approved():
+    policy = RuntimePolicy(allow_external_provider_benchmark=True, network_access=True)
+    policy.authorize("external_provider_benchmark", approved=True)  # must not raise
+
+
+def test_external_provider_benchmark_requires_explicit_approval_even_when_enabled():
+    # Regression test: allow_external_provider_benchmark=True alone must not
+    # be sufficient — this is what would have caught the original bug where
+    # cli.py constructed the policy with the flag already True and then
+    # authorized against that same object, making the check tautological.
+    policy = RuntimePolicy(allow_external_provider_benchmark=True, network_access=True)
+    with pytest.raises(PermissionError):
+        policy.authorize("external_provider_benchmark", approved=False)
+
+
+def test_external_provider_benchmark_requires_network_access():
+    with pytest.raises(ValueError, match="network_access"):
+        RuntimePolicy(allow_external_provider_benchmark=True, network_access=False).validate()
+
+
+def test_pr_agent_review_disabled_by_default():
+    policy = RuntimePolicy()
+    with pytest.raises(PermissionError):
+        policy.authorize("pr_agent_review")
+
+
+def test_pr_agent_review_requires_explicit_approval():
+    policy = RuntimePolicy(allow_external_provider_benchmark=True, network_access=True)
+    with pytest.raises(PermissionError):
+        policy.authorize("pr_agent_review", approved=False)
+    policy.authorize("pr_agent_review", approved=True)  # must not raise

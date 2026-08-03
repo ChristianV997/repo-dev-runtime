@@ -7,9 +7,6 @@ name = "repo-dev-runtime"
 version = "0.1.0"
 description = "Governed, repository-agnostic multi-agent coding runtime"
 requires-python = ">=3.11"
-dependencies = [
-    "httpx>=0.24",
-]
 
 [project.scripts]
 repo-dev-runtime-install = "repo_dev_runtime.scaffold.installer:_console_entry_point"
