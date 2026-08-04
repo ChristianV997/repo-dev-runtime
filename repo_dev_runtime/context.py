@@ -1,12 +1,20 @@
 """Bounded, read-only repository context for model prompts."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
-from .repository_map import build_repository_map, rank_entries, render_repository_map
+from .repository_map import MAX_MAP_FILE_BYTES, SKIP_DIRS, build_repository_map, path_allowed, rank_entries, render_repository_map
 
 
 _TEXT_SUFFIXES = {".md", ".txt", ".toml", ".json", ".yaml", ".yml", ".py", ".js", ".ts", ".tsx", ".jsx", ".sh", ".ps1", ".css", ".html"}
+
+
+def _read_text_bounded(path: Path, max_bytes: int) -> str:
+    """Read at most ``max_bytes`` while avoiding unbounded prompt input."""
+    with path.open("rb") as stream:
+        data = stream.read(max_bytes + 1)
+    return data[:max_bytes].decode("utf-8", errors="ignore")
 
 
 def build_repository_context(root: str | Path, *, allowed_paths: tuple[str, ...], forbidden_paths: tuple[str, ...], max_bytes: int = 80_000) -> str:
@@ -15,23 +23,35 @@ def build_repository_context(root: str | Path, *, allowed_paths: tuple[str, ...]
         raise ValueError("context limit is too small")
     base = Path(root).resolve()
     files: list[Path] = []
-    for candidate in sorted(base.rglob("*")):
-        if not candidate.is_file() or candidate.suffix.lower() not in _TEXT_SUFFIXES:
-            continue
-        relative = candidate.relative_to(base).as_posix()
-        parts = set(Path(relative).parts)
-        if any(item in parts or relative.startswith(item.rstrip("/") + "/") for item in forbidden_paths):
-            continue
-        if "." not in allowed_paths and not any(relative == item or relative.startswith(item.rstrip("/") + "/") for item in allowed_paths):
-            continue
-        files.append(candidate)
+    for current, directories, filenames in os.walk(base, topdown=True, followlinks=False):
+        directories[:] = sorted(
+            directory for directory in directories
+            if directory.casefold() not in SKIP_DIRS
+            and not (Path(current) / directory).is_symlink()
+        )
+        for filename in sorted(filenames):
+            candidate = Path(current) / filename
+            if candidate.is_symlink() or candidate.suffix.lower() not in _TEXT_SUFFIXES:
+                continue
+            relative = candidate.relative_to(base).as_posix()
+            if not path_allowed(relative, allowed_paths, forbidden_paths):
+                continue
+            try:
+                if candidate.stat().st_size > MAX_MAP_FILE_BYTES:
+                    continue
+            except OSError:
+                continue
+            files.append(candidate)
     sections = [f"Repository root: {base}", "Files:"]
     used = sum(len(item.encode("utf-8")) for item in sections) + 1
     for candidate in files:
         relative = candidate.relative_to(base).as_posix()
         try:
-            content = candidate.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+            remaining = max_bytes - used
+            if remaining <= 0:
+                break
+            content = _read_text_bounded(candidate, min(MAX_MAP_FILE_BYTES, remaining))
+        except OSError:
             continue
         section = f"\n--- {relative} ---\n{content}"
         encoded = section.encode("utf-8")
@@ -54,8 +74,11 @@ def build_adaptive_context(root: str | Path, *, objective: str, allowed_paths: t
     for entry in rank_entries(entries, objective):
         candidate = base / entry.path
         try:
-            content = candidate.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+            remaining = max_bytes - used
+            if remaining <= 0:
+                break
+            content = _read_text_bounded(candidate, min(MAX_MAP_FILE_BYTES, remaining))
+        except OSError:
             continue
         section = f"\n--- {entry.path} ---\n{content}"
         remaining = max_bytes - used
