@@ -6,7 +6,7 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from .contracts.models import DevResult, DevTask
 from .governance.artifacts import RunEnvelope
