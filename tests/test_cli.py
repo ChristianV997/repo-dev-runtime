@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -64,6 +65,30 @@ def test_run_pr_agent_requires_live_edits_and_explicit_approval(tmp_path, capsys
     ], capsys)
     assert code == 1
     assert payload["reason"] == "pr_agent_requires_explicit_approval"
+
+
+def test_run_handoff_requires_explicit_vault(tmp_path, capsys):
+    code, payload = _run_cli([
+        "run", str(tmp_path), "--prompt", "inspect", "--write-handoff",
+        "--artifacts-root", str(tmp_path / "artifacts"),
+    ], capsys)
+
+    assert code == 1
+    assert payload["reason"] == "obsidian_vault_required_for_handoff"
+
+
+def test_run_handoff_writes_only_to_explicit_obsidian_vault(tmp_path, capsys):
+    vault = tmp_path / "vault"
+    code, payload = _run_cli([
+        "run", str(tmp_path), "--prompt", "inspect", "--write-handoff",
+        "--obsidian-vault", str(vault), "--artifacts-root", str(tmp_path / "artifacts"),
+    ], capsys)
+
+    assert code == 0
+    assert payload["handoff"]["status"] == "written"
+    handoff = Path(payload["handoff"]["path"])
+    assert handoff.is_file()
+    assert vault.resolve() in handoff.resolve().parents
 
 
 def test_cli_enable_openclaw_flag_is_wired_into_default_registry(tmp_path, monkeypatch):

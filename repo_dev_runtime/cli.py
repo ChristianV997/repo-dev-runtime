@@ -17,6 +17,8 @@ from .runtimes.pr_agent_reviewer import PRAgentReviewerRuntime
 from .governance.policy import RuntimePolicy
 from .workflow import DevelopmentWorkflow
 from .integrations.github import GitHubPublisher
+from .integrations.obsidian import ObsidianHandoff
+from .handoff import render_handoff
 from .eval.fakes import FakePRAgentAdapter, default_fake_provider_factory
 from .eval.fixtures import FIXTURE_CASES
 from .eval.harness import aggregate_scorecard, run_fixture_benchmark
@@ -63,6 +65,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     run.add_argument("--apply-edits", action="store_true", help="accept only validated implementer proposals in a disposable worktree")
     run.add_argument("--max-fix-attempts", type=int, default=0, help="bounded repair proposals after failed quality checks (0-3)")
     run.add_argument("--artifacts-root")
+    run.add_argument("--write-handoff", action="store_true", help="write a redacted, one-way Markdown run handoff to an explicitly selected Obsidian vault")
+    run.add_argument("--obsidian-vault", help="Obsidian vault root required by --write-handoff")
     benchmark = sub.add_parser("benchmark", help="run the deterministic fixture benchmark against a coding-agent provider")
     benchmark.add_argument("--fixtures-root", help="temp directory root for synthetic fixture repos (defaults to the OS temp dir)")
     benchmark.add_argument("--fixture", action="append", choices=[case.fixture_id for case in FIXTURE_CASES], help="run only a named fixture; repeat to select several (default: all fixtures)")
@@ -130,6 +134,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             except PermissionError as exc:
                 print(json.dumps({"status": "blocked", "reason": str(exc)}, indent=2))
                 return 1
+        if args.write_handoff and not args.obsidian_vault:
+            print(json.dumps({"status": "blocked", "reason": "obsidian_vault_required_for_handoff"}, indent=2))
+            return 1
         artifacts_root = Path(args.artifacts_root).expanduser() if args.artifacts_root else Path.home() / ".repo-dev-runtime" / "runs" / manifest.name
         runtime = RuntimeRouter(default_registry(ollama_enabled=args.enable_ollama if args.live else None, aider_enabled=args.enable_aider if args.live else None, omniroute_enabled=args.enable_omniroute if args.live else None, hermes_enabled=args.enable_sidecars if args.live else None, deerflow_enabled=args.enable_sidecars if args.live else None, openclaw_enabled=args.enable_openclaw if args.live else None), policy=policy) if args.live else DryRunRuntime()
         reviewer_runtime = None
@@ -153,7 +160,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (FileExistsError, FileNotFoundError, ValueError) as exc:
             print(json.dumps({"status": "blocked", "reason": "workflow_request_invalid", "detail": str(exc)}, indent=2))
             return 1
-        print(json.dumps({"run_id": result.run_id, "status": result.status, "artifact_dir": result.artifact_dir, "results": [item.to_dict() for item in result.results]}, indent=2))
+        handoff = {}
+        if args.write_handoff:
+            quality_path = Path(result.artifact_dir) / "quality.json"
+            try:
+                quality = json.loads(quality_path.read_text(encoding="utf-8")) if quality_path.exists() else {}
+                next_action = "review the generated patch and run envelope" if result.status == "ready_for_human_review" else "inspect the blocked run envelope before retrying"
+                content = render_handoff(
+                    repository=manifest.name,
+                    run_id=result.run_id,
+                    status=result.status,
+                    next_action=next_action,
+                    tests=quality,
+                )
+                destination = ObsidianHandoff(args.obsidian_vault).write(
+                    f"repo-dev-runtime-{manifest.name}-{result.run_id}.md",
+                    content,
+                    dry_run=False,
+                )
+                handoff = {"path": str(destination), "status": "written"}
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                # The handoff is a non-authoritative convenience mirror. A
+                # failure must be visible but cannot change a completed run's
+                # promotion state or mutate its checksum-validated envelope.
+                handoff = {"status": "failed", "error_type": type(exc).__name__, "detail": str(exc)[:500]}
+        print(json.dumps({"run_id": result.run_id, "status": result.status, "artifact_dir": result.artifact_dir, "handoff": handoff, "results": [item.to_dict() for item in result.results]}, indent=2))
         return 0 if result.status in {"ready_for_human_review", "pr_created"} else 1
     if args.command == "benchmark":
         return _run_benchmark(args)

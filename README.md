@@ -48,6 +48,11 @@ intentionally excluded.
 The runtime uses five bounded roles: planner, implementer, tester, reviewer,
 and integrator. The integrator can prepare a handoff but cannot merge or push.
 Scheduling is declarative and one-shot; no background daemon is implemented.
+
+Use `run --write-handoff --obsidian-vault /path/to/vault` only when a
+redacted, generated Markdown summary should be mirrored into Obsidian. The
+run envelope remains the canonical record; the one-way handoff has no code,
+test, promotion, Git, or publishing authority.
 `repo_dev_runtime/scheduler.py`'s `TaskStateStore` is a standalone,
 independently tested one-shot task-state library available for callers who
 want it directly; the live workflow below does not use it, since its own
