@@ -1,10 +1,15 @@
-"""Sandboxed Aider adapter for controlled fixture benchmarking.
+"""Sandboxed Aider adapter for the implementer role.
 
-This adapter is deliberately not registered in ``default_registry``. Aider
-edits files directly, so it runs only in a fresh temporary copy of a bounded
-set of text files. The governed worktree receives a normal
-``RepoDev.EditProposal.v1`` generated from that sandbox diff and remains
-unchanged until ``PatchApplier`` validates it.
+Registered in ``default_registry`` as a first-preference ``implementer``
+candidate, but disabled by default (``DEV_RUNTIME_AIDER``) and reachable
+from ``run`` only via the explicit ``--enable-aider`` flag, which is
+itself gated on a distinct core provider and an independent reviewer
+being configured (see ``cli.py``'s
+``aider_requires_routable_core_and_independent_reviewer`` check) - Aider
+never runs alone. Aider edits files directly, so it runs only in a fresh
+temporary copy of a bounded set of text files. The governed worktree
+receives a normal ``RepoDev.EditProposal.v1`` generated from that sandbox
+diff and remains unchanged until ``PatchApplier`` validates it.
 """
 from __future__ import annotations
 

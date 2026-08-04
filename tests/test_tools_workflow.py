@@ -466,9 +466,12 @@ def test_live_edit_requires_independent_post_quality_reviewer(tmp_path):
     assert "Quality:" in runtime.reviewer_prompt
     assert "Final diff:" in runtime.reviewer_prompt
     assert "value = 2" in runtime.reviewer_prompt
+    assert result.self_reviewed is False
     artifact_dir = tmp_path / "runs" / result.run_id
     assert (artifact_dir / "review_verdict.json").exists()
     assert (artifact_dir / "reviewer.json").exists()
+    promotion = json.loads((artifact_dir / "promotion.json").read_text(encoding="utf-8"))
+    assert promotion["self_reviewed"] is False
 
 
 def test_live_edit_self_review_is_recorded_as_a_warning_when_no_independent_reviewer_is_available(tmp_path):
@@ -505,6 +508,17 @@ def test_live_edit_self_review_is_recorded_as_a_warning_when_no_independent_revi
     assert result.status == "ready_for_human_review"
     events = (tmp_path / "runs" / result.run_id / "events.jsonl").read_text(encoding="utf-8")
     assert "self_reviewed_warning" in events
+    assert result.self_reviewed is True
+    promotion = json.loads((tmp_path / "runs" / result.run_id / "promotion.json").read_text(encoding="utf-8"))
+    assert promotion["self_reviewed"] is True
+
+    resumed = DevelopmentWorkflow(
+        manifest=manifest,
+        policy=RuntimePolicy(),
+        runtime=SameProviderReviewRuntime(),
+        artifacts_root=tmp_path / "runs",
+    ).run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True, run_id=result.run_id, resume=True)
+    assert resumed.self_reviewed is True
 
 
 def test_live_edit_still_blocks_self_review_when_independence_was_available(tmp_path):
