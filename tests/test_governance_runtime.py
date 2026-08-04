@@ -316,3 +316,22 @@ def test_command_policy_denies_unparseable_commands_instead_of_raising():
     out of evaluate_command and leave callers an exception they don't expect."""
     decision = evaluate_command('echo "unbalanced')
     assert decision.allowed is False
+
+
+def test_event_log_read_is_bounded_like_the_write(tmp_path, monkeypatch):
+    """Regression test: event() refused to grow events.jsonl past
+    _MAX_EVENTS_BYTES, but __post_init__ read it back with an unbounded
+    read_text(). A run directory written before the bound existed, or grown
+    by anything other than event(), was still loaded fully into memory on
+    every resume."""
+    from repo_dev_runtime.governance import artifacts as artifacts_module
+
+    envelope = RunEnvelope("one", tmp_path / "one")
+    envelope.event("started")
+    # Grow the log past a (small) bound without going through event().
+    event_path = tmp_path / "one" / "events.jsonl"
+    event_path.write_text(event_path.read_text(encoding="utf-8") + "x" * 500, encoding="utf-8")
+    monkeypatch.setattr(artifacts_module, "_MAX_EVENTS_BYTES", 200)
+
+    with pytest.raises(ValueError, match="event log exceeds maximum size"):
+        RunEnvelope("one", tmp_path / "one")
