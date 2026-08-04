@@ -96,6 +96,12 @@ The fixture harness supplies bounded repository context and requires an exact
 `RepoDev.EditProposal.v1` response. A proposal is counted as completed only
 after its fixture's behavioral check passes.
 
+`AiderRuntime` is available only through the same explicit provider-module
+hook. It runs Aider in a temporary copy and translates its sandbox diff back
+to an `EditProposal`; it is not registered for ordinary `run` routing. See
+`docs/aider-adapter.md` for the required isolated installation and benchmark
+command.
+
 Any provider implementing the `DevelopmentRuntime` protocol can be scored
 through `--provider-module` without changing this package; see
 `docs/provider-integration-guide.md`.

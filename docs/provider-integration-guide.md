@@ -26,6 +26,10 @@ House rules every adapter follows, taken from the existing ones:
   `docs/credential-policy.md`.
 - Expose no `apply`/`commit`/`merge`/`push`/`create_pull_request` method.
   Capability the adapter does not have cannot be misused.
+- If the provider edits files itself, run it only in a secondary copied
+  sandbox and translate the resulting diff into an `EditProposal`. Never
+  grant it the governed worktree directly; `runtimes/aider.py` is the
+  reference boundary for this case.
 
 ## 2. Assert the contract with the shared kit
 

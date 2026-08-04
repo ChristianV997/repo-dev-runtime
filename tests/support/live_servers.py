@@ -64,7 +64,10 @@ class _QuietThreadingHTTPServer(ThreadingHTTPServer):
         import sys
 
         exc_type = sys.exc_info()[0]
-        if exc_type is not None and issubclass(exc_type, (BrokenPipeError, ConnectionResetError)):
+        if exc_type is not None and issubclass(
+            exc_type,
+            (BrokenPipeError, ConnectionResetError, ConnectionAbortedError),
+        ):
             return
         super().handle_error(request, client_address)
 
