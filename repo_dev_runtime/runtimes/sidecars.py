@@ -21,10 +21,19 @@ def _prompt(task: DevTask, runtime: str) -> str:
     )
 
 
-def _post_json(url: str, body: Mapping[str, Any], headers: Mapping[str, str], timeout: float) -> dict[str, Any]:
+def _post_json(
+    url: str,
+    body: Mapping[str, Any],
+    headers: Mapping[str, str],
+    timeout: float,
+    max_output_bytes: int = 2_000_000,
+) -> dict[str, Any]:
     request = Request(url, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json", **headers}, method="POST")
     with urlopen(request, timeout=timeout) as response:
-        value = json.loads(response.read(2_000_001).decode("utf-8"))
+        raw = response.read(max_output_bytes + 1)
+    if len(raw) > max_output_bytes:
+        raise ValueError("sidecar output exceeded limit")
+    value = json.loads(raw.decode("utf-8"))
     if not isinstance(value, dict):
         raise ValueError("sidecar response must be an object")
     return value
@@ -55,7 +64,13 @@ class HermesRuntime:
         headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
         started = time.perf_counter()
         try:
-            body = self.request(f"{self.base_url}/v1/chat/completions", {"model": task.model if task.model != "default" else self.model, "messages": [{"role": "user", "content": _prompt(task, self.name)}], "stream": False}, headers, task.timeout_s)
+            body = self.request(
+                f"{self.base_url}/v1/chat/completions",
+                {"model": task.model if task.model != "default" else self.model, "messages": [{"role": "user", "content": _prompt(task, self.name)}], "stream": False},
+                headers,
+                task.timeout_s,
+                task.max_output_bytes,
+            )
             content = body["choices"][0]["message"]["content"]
             return DevResult(task.task_id, self.name, "succeeded", output=str(content), telemetry={"duration_ms": round((time.perf_counter() - started) * 1000, 2)})
         except (HTTPError, URLError, TimeoutError, OSError, KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
