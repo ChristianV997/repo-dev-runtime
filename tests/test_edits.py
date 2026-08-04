@@ -61,6 +61,16 @@ def test_repository_root_allowed_path_permits_in_worktree_edit(tmp_path: Path) -
     assert (root / "src" / "app.py").read_text(encoding="utf-8") == "value = 2\n"
 
 
+def test_path_policy_is_case_insensitive_for_allowed_and_forbidden_paths(tmp_path: Path) -> None:
+    root, head = git_repo(tmp_path)
+    edit = FileEdit("src/app.py", "search_replace", search="value = 1", replace="value = 2")
+    PatchApplier(root, allowed_paths=("SRC",), forbidden_paths=("SECRETS",)).apply(proposal(root, head, edit))
+
+    secret_edit = FileEdit("src/secrets/token.py", "whole_file", content="token = 'blocked'\n")
+    with pytest.raises(PatchValidationError, match="forbidden path"):
+        PatchApplier(root, allowed_paths=(".",), forbidden_paths=("secrets",)).apply(proposal(root, head, secret_edit))
+
+
 @pytest.mark.parametrize("edit", [
     FileEdit("../escape.py", "whole_file", content="x"),
     FileEdit("/absolute.py", "whole_file", content="x"),

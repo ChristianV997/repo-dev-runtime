@@ -10,6 +10,8 @@ import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from .path_policy import path_allowed
+
 
 TEXT_SUFFIXES = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".md", ".toml", ".json", ".yaml", ".yml"}
 SKIP_DIRS = {
@@ -32,20 +34,6 @@ class MapEntry:
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self) | {"symbols": list(self.symbols), "imports": list(self.imports)}
-
-
-def path_allowed(relative: str, allowed_paths: tuple[str, ...], forbidden_paths: tuple[str, ...]) -> bool:
-    normalized = relative.casefold()
-    parts = {part.casefold() for part in Path(relative).parts}
-    if any(
-        item.casefold() in parts or normalized.startswith(item.casefold().rstrip("/") + "/")
-        for item in forbidden_paths
-    ):
-        return False
-    return any(item.casefold() == "." for item in allowed_paths) or not allowed_paths or any(
-        normalized == item.casefold() or normalized.startswith(item.casefold().rstrip("/") + "/")
-        for item in allowed_paths
-    )
 
 
 def build_repository_map(root: str | Path, *, allowed_paths: tuple[str, ...], forbidden_paths: tuple[str, ...], max_files: int = 2_000) -> tuple[MapEntry, ...]:
