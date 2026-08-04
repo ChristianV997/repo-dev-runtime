@@ -284,3 +284,50 @@ def test_create_pr_workflow_calls_publisher_with_correct_signature(tmp_path, mon
     promotion = json.loads((tmp_path / "runs" / result.run_id / "promotion.json").read_text())
     assert promotion["status"] == "pr_created"
     assert promotion["pull_request"]["url"] == "https://example.invalid/pr/1"
+
+
+def test_resuming_a_completed_create_pr_run_does_not_publish_a_second_pull_request(tmp_path, monkeypatch):
+    """Regression test: nothing in DevelopmentWorkflow.run() previously
+    checked whether a resumed run had already reached a success terminal
+    state (promotion.json's "status", not WorkflowResult.status) before
+    falling through to quality checks and the create_pr block again.
+    --resume --apply-edits --create-pr against an already-completed run_id
+    would build a brand-new worktree/branch (the original may already be
+    deleted - see WorktreeManager.remove(delete_branch=True)) and call
+    GitHubPublisher.create_from_worktree a second time: a real duplicate
+    PR/branch push."""
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "initial"], check=True)
+
+    calls = {"create_pull_request": 0, "publish_branch": 0}
+
+    def fake_publish_branch(self, *, repository, branch, base="main"):
+        calls["publish_branch"] += 1
+        return {"branch": branch, "base": base, "pushed": True}
+
+    def fake_create_pull_request(self, *, repository, branch, base, title, body):
+        calls["create_pull_request"] += 1
+        return {"url": f"https://example.invalid/pr/{calls['create_pull_request']}", "number": calls["create_pull_request"], "branch": branch, "base": base}
+
+    monkeypatch.setattr(GitHubPublisher, "publish_branch", fake_publish_branch)
+    monkeypatch.setattr(GitHubPublisher, "create_pull_request", fake_create_pull_request)
+
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=("src",), test_command=("git", "status", "--short"), pull_request_creation=True)
+    policy = RuntimePolicy(allow_pr_creation=True, allow_branch_publish=True)
+    publisher = GitHubPublisher(policy=policy, token="fake-token")
+    workflow = DevelopmentWorkflow(manifest=manifest, policy=policy, runtime=ProposalRuntime(), artifacts_root=tmp_path / "runs")
+
+    first = workflow.run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True, create_pr=True, publisher=publisher)
+    assert first.status == "ready_for_human_review"
+    assert calls["create_pull_request"] == 1
+    assert calls["publish_branch"] == 1
+
+    resumed = workflow.run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True, create_pr=True, publisher=publisher, run_id=first.run_id, resume=True)
+    assert resumed.status == "ready_for_human_review"
+    assert calls["create_pull_request"] == 1, "resuming an already-completed create_pr run must not publish a second pull request"
+    assert calls["publish_branch"] == 1

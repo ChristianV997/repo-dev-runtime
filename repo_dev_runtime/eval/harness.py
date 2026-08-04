@@ -62,9 +62,20 @@ def _git_base_files_for_diff(
     an isolated scratch repository. New files have no baseline and are
     omitted. Non-text and over-budget inputs fail closed by omission: the
     bridge will reject an inapplicable diff rather than widening access.
+
+    Uses ``--name-status -M`` (not ``--name-only``) specifically so renames
+    are handled correctly. ``--name-only`` reports only the new path for a
+    rename, and ``HEAD:<new-path>`` does not exist before the rename, so the
+    baseline silently came back empty for every renamed file until this fix.
+    ``-M`` is passed explicitly rather than relying on a ``diff.renames``
+    config default: without it, git reports a rename as an unrelated
+    delete+add pair, and the deleted old path (which no diff hunk will ever
+    reference again) keeps a baseline while the new path — the one the
+    diff/patch actually needs — gets none, silently reproducing the same
+    failure under a different shape.
     """
     listed = subprocess.run(
-        ["git", "-C", str(worktree_path), "diff", "--name-only", "-z", "HEAD"],
+        ["git", "-C", str(worktree_path), "diff", "--name-status", "-M", "-z", "HEAD"],
         capture_output=True, check=False,
     )
     if listed.returncode != 0:
@@ -72,17 +83,38 @@ def _git_base_files_for_diff(
     files: dict[str, str] = {}
     total = 0
     forbidden = {part.lower() for part in forbidden_paths}
-    for raw_name in listed.stdout.split(b"\0"):
-        if not raw_name:
-            continue
+    tokens = [token for token in listed.stdout.split(b"\0") if token]
+    index = 0
+    while index < len(tokens):
         try:
-            name = raw_name.decode("utf-8")
+            status = tokens[index].decode("ascii")
+        except UnicodeDecodeError:
+            index += 1
+            continue
+        index += 1
+        if status.startswith(("R", "C")):
+            # Rename/copy records carry both the old and new path; the
+            # baseline must be read from the old path but keyed by the new
+            # one, since that is what the diff (and the bridge applying it)
+            # will reference.
+            if index + 1 >= len(tokens):
+                break
+            lookup_raw, key_raw = tokens[index], tokens[index + 1]
+            index += 2
+        else:
+            if index >= len(tokens):
+                break
+            lookup_raw = key_raw = tokens[index]
+            index += 1
+        try:
+            lookup_name = lookup_raw.decode("utf-8")
+            name = key_raw.decode("utf-8")
         except UnicodeDecodeError:
             continue
         path_parts = Path(name).parts
         if not name or name.startswith("/") or "\\" in name or ".." in path_parts or any(part.lower() in forbidden for part in path_parts):
             continue
-        baseline = subprocess.run(["git", "-C", str(worktree_path), "show", f"HEAD:{name}"], capture_output=True, check=False)
+        baseline = subprocess.run(["git", "-C", str(worktree_path), "show", f"HEAD:{lookup_name}"], capture_output=True, check=False)
         if baseline.returncode != 0:
             continue
         try:
