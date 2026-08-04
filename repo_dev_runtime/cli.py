@@ -51,6 +51,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run.add_argument("--enable-ollama", action="store_true")
     run.add_argument("--enable-omniroute", action="store_true")
     run.add_argument("--enable-sidecars", action="store_true")
+    run.add_argument("--enable-openclaw", action="store_true", help="reach the OpenClaw sidecar adapter; still fails closed (blocked) in v1 since its WebSocket client is unimplemented")
     run.add_argument("--approve-paid", action="store_true")
     run.add_argument("--create-pr", action="store_true")
     run.add_argument("--apply-edits", action="store_true", help="accept only validated implementer proposals in a disposable worktree")
@@ -59,7 +60,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     benchmark = sub.add_parser("benchmark", help="run the deterministic fixture benchmark against a coding-agent provider")
     benchmark.add_argument("--fixtures-root", help="temp directory root for synthetic fixture repos (defaults to the OS temp dir)")
     benchmark.add_argument("--fixture", action="append", choices=[case.fixture_id for case in FIXTURE_CASES], help="run only a named fixture; repeat to select several (default: all fixtures)")
-    benchmark.add_argument("--provider", choices=["fake", "ollama", "openai_compatible"], default="fake")
+    benchmark.add_argument("--provider", choices=["fake", "ollama", "openai_compatible", "hermes", "deerflow"], default="fake")
     benchmark.add_argument("--provider-module", help="benchmark an externally-defined provider, given as 'package.module:ClassName'; must implement the DevelopmentRuntime protocol. Requires --live.")
     benchmark.add_argument("--provider-name", help="scorecard name for --provider-module (defaults to the provider's own .name)")
     benchmark.add_argument("--live", action="store_true", help="required to run a real (non-fake) provider")
@@ -97,6 +98,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         policy = RuntimePolicy(
             allow_ollama=args.enable_ollama,
             allow_omniroute=allow_omniroute,
+            allow_openclaw=args.enable_openclaw,
             allow_paid_routing=allow_paid,
             allow_pr_creation=args.create_pr and manifest.pull_request_creation,
             allow_branch_publish=args.create_pr and manifest.pull_request_creation,
@@ -109,7 +111,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps({"status": "blocked", "reason": "apply_edits_requires_live"}, indent=2))
             return 1
         artifacts_root = Path(args.artifacts_root).expanduser() if args.artifacts_root else Path.home() / ".repo-dev-runtime" / "runs" / manifest.name
-        runtime = RuntimeRouter(default_registry(ollama_enabled=args.enable_ollama if args.live else None, omniroute_enabled=args.enable_omniroute if args.live else None, hermes_enabled=args.enable_sidecars if args.live else None, deerflow_enabled=args.enable_sidecars if args.live else None), policy=policy) if args.live else DryRunRuntime()
+        runtime = RuntimeRouter(default_registry(ollama_enabled=args.enable_ollama if args.live else None, omniroute_enabled=args.enable_omniroute if args.live else None, hermes_enabled=args.enable_sidecars if args.live else None, deerflow_enabled=args.enable_sidecars if args.live else None, openclaw_enabled=args.enable_openclaw if args.live else None), policy=policy) if args.live else DryRunRuntime()
         publisher = GitHubPublisher(policy=policy) if args.create_pr else None
         try:
             result = DevelopmentWorkflow(manifest=manifest, policy=policy, runtime=runtime, artifacts_root=artifacts_root).run(prompt=args.prompt, base_ref=args.base_ref, dry_run=not args.live, run_id=args.run_id, resume=args.resume, approved=args.approve_paid, publisher=publisher, create_pr=args.create_pr, apply_edits=args.apply_edits, max_fix_attempts=args.max_fix_attempts)
@@ -183,7 +185,7 @@ def _run_benchmark(args) -> int:
             print(json.dumps({"status": "blocked", "reason": "real_provider_requires_live"}, indent=2))
             return 1
         policy = RuntimePolicy(
-            allow_ollama=args.provider == "ollama", allow_omniroute=args.provider == "openai_compatible",
+            allow_ollama=args.provider == "ollama", allow_omniroute=args.provider in ("openai_compatible", "hermes", "deerflow"),
             network_access=True, allow_external_provider_benchmark=True,
         )
         try:
@@ -191,7 +193,12 @@ def _run_benchmark(args) -> int:
         except PermissionError as exc:
             print(json.dumps({"status": "blocked", "reason": str(exc)}, indent=2))
             return 1
-        registry = default_registry(ollama_enabled=args.provider == "ollama" or None, omniroute_enabled=args.provider == "openai_compatible" or None)
+        registry = default_registry(
+            ollama_enabled=args.provider == "ollama" or None,
+            omniroute_enabled=args.provider == "openai_compatible" or None,
+            hermes_enabled=args.provider == "hermes" or None,
+            deerflow_enabled=args.provider == "deerflow" or None,
+        )
         runtime = registry.get(args.provider)
         provider_name = args.provider
 

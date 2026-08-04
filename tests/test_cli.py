@@ -50,6 +50,30 @@ def fast_benchmark(monkeypatch):
     monkeypatch.setattr(cli, "run_fixture_benchmark", run_fixture_benchmark)
 
 
+def test_cli_enable_openclaw_flag_is_wired_into_default_registry(tmp_path, monkeypatch):
+    """Regression test: cli.py had no --enable-openclaw flag at all, so
+    default_registry() was always called with openclaw_enabled unset
+    (None) regardless of user intent - OpenClaw was reachable nowhere
+    from the CLI. This does not change OpenClaw's own fail-closed
+    behavior (it still blocks internally); it only proves the flag now
+    reaches default_registry()."""
+    captured = {}
+    real_default_registry = cli.default_registry
+
+    def spying_default_registry(**kwargs):
+        captured.update(kwargs)
+        return real_default_registry(**kwargs)
+
+    monkeypatch.setattr(cli, "default_registry", spying_default_registry)
+
+    cli.main([
+        "run", str(tmp_path), "--prompt", "inspect", "--live", "--enable-openclaw",
+        "--artifacts-root", str(tmp_path / "artifacts"),
+    ])
+
+    assert captured.get("openclaw_enabled") is True
+
+
 def test_cli_dry_run_is_provider_independent(tmp_path):
     result = subprocess.run(
         [sys.executable, "-m", "repo_dev_runtime.cli", "run", str(tmp_path), "--prompt", "inspect", "--artifacts-root", str(tmp_path / "artifacts")],
@@ -101,6 +125,45 @@ def test_cli_benchmark_real_provider_requires_live(tmp_path, capsys, fast_benchm
     code, result = _run_cli(["benchmark", "--provider", "ollama", "--fixtures-root", str(tmp_path)], capsys)
     assert code == 1
     assert result["reason"] == "real_provider_requires_live"
+
+
+@pytest.mark.parametrize("provider", ["hermes", "deerflow"])
+def test_cli_benchmark_accepts_hermes_and_deerflow_providers(provider, tmp_path, capsys, fast_benchmark):
+    """Regression test: --provider choices lagged the runtime registry -
+    hermes/deerflow were already routable via `run --live --enable-sidecars`
+    but had no first-class --provider option here, forcing operators to
+    fall back to --provider-module for a class they could otherwise select
+    directly."""
+    code, result = _run_cli(["benchmark", "--provider", provider, "--fixtures-root", str(tmp_path)], capsys)
+    assert code == 1
+    assert result["reason"] == "real_provider_requires_live"
+
+
+@pytest.mark.parametrize("provider", ["hermes", "deerflow"])
+def test_cli_benchmark_hermes_and_deerflow_select_the_matching_runtime(provider, tmp_path, monkeypatch):
+    """--provider hermes/deerflow must route to that runtime's own class,
+    not silently fall through to a different adapter."""
+    from repo_dev_runtime.runtimes.sidecars import DeerFlowRuntime, HermesRuntime
+
+    expected_class = {"hermes": HermesRuntime, "deerflow": DeerFlowRuntime}[provider]
+    captured = {}
+    real_default_registry = cli.default_registry
+
+    def spying_default_registry(**kwargs):
+        captured.update(kwargs)
+        return real_default_registry(**kwargs)
+
+    monkeypatch.setattr(cli, "default_registry", spying_default_registry)
+
+    cli.main([
+        "benchmark", "--provider", provider, "--live",
+        "--approve-external-provider-benchmark", "--fixtures-root", str(tmp_path),
+        "--fixture", "one_file_bugfix",
+    ])
+
+    assert captured.get(f"{provider}_enabled") is True
+    registry = real_default_registry(**captured)
+    assert isinstance(registry.get(provider), expected_class)
 
 
 def test_cli_enable_openhands_and_mini_swe_agent_attach_blocked_specs(tmp_path, capsys, fast_benchmark):
