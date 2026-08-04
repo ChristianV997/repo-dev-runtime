@@ -141,6 +141,21 @@ def test_nested_artifact_checksums_round_trip(tmp_path):
     envelope.verify_checksums(required=("nested/result.json",))
 
 
+def test_run_envelope_rejects_symlinked_artifacts(tmp_path):
+    envelope = RunEnvelope("one", tmp_path / "one")
+    envelope.event("started")
+    outside = tmp_path / "outside.json"
+    outside.write_text("outside", encoding="utf-8")
+    link = tmp_path / "one" / "linked.json"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are unavailable in this environment")
+
+    with pytest.raises(ValueError, match="symlink"):
+        envelope.finalize({"status": "blocked"})
+
+
 def test_diagnostics_are_bounded():
     result = actionable_output("\n".join(f"line-{i}" for i in range(100)), max_lines=3, max_chars=100)
     assert result.splitlines() == ["line-97", "line-98", "line-99"]
