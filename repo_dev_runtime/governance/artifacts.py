@@ -44,6 +44,13 @@ class RunEnvelope:
         if event_path.is_symlink():
             raise ValueError("run event log must not be a symlink")
         if not self.events and event_path.exists():
+            # Bound the read as well as the write. event() refuses to grow
+            # the log past _MAX_EVENTS_BYTES, but that only constrains logs
+            # this process wrote: a run directory produced before the bound
+            # existed, or grown by anything other than event(), was still
+            # read fully into memory on every resume. Fail closed instead.
+            if event_path.stat().st_size > _MAX_EVENTS_BYTES:
+                raise ValueError(f"run event log exceeds maximum size of {_MAX_EVENTS_BYTES} bytes")
             for line in event_path.read_text(encoding="utf-8").splitlines():
                 if line.strip():
                     self.events.append(json.loads(line))
