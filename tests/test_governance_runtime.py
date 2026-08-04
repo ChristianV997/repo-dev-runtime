@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from concurrent.futures import ThreadPoolExecutor
 
 from repo_dev_runtime.discovery import validate_consumer
 from repo_dev_runtime.governance.artifacts import RunEnvelope
@@ -56,6 +57,33 @@ def test_scheduler_state_is_resumable_and_atomic(tmp_path):
     assert store.update("task-1", "running", attempt=1)["status"] == "running"
     assert store.load()["task-1"]["attempt"] == 1
     assert store.update("task-1", "succeeded")["status"] == "succeeded"
+
+
+def test_scheduler_state_serializes_concurrent_updates(tmp_path):
+    store = TaskStateStore(tmp_path / "state.json")
+
+    def update(index):
+        return store.update(f"task-{index}", "succeeded", worker=index)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(update, range(24)))
+
+    state = store.load()
+    assert len(state) == 24
+    assert state["task-17"] == {"status": "succeeded", "worker": 17}
+
+
+def test_scheduler_state_rejects_symlinked_state_file(tmp_path):
+    target = tmp_path / "outside.json"
+    target.write_text("{}", encoding="utf-8")
+    link = tmp_path / "state.json"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are unavailable in this environment")
+
+    with pytest.raises(ValueError, match="regular file"):
+        TaskStateStore(link).load()
 
 
 def test_event_hash_is_stable_for_same_event_shape(tmp_path):
