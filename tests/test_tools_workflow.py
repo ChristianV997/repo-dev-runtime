@@ -118,6 +118,8 @@ def test_live_edit_resume_replays_checksum_validated_patches(tmp_path):
     assert first.status == "blocked"
     run_dir = tmp_path / "runs" / first.run_id
     assert (run_dir / "patch_replay.jsonl").exists()
+    retained_branch = subprocess.run(["git", "-C", str(tmp_path), "branch", "--list", f"repo-dev/{first.run_id}"], capture_output=True, text=True, check=True)
+    assert retained_branch.stdout.strip()
     assert (tmp_path / "src" / "app.py").read_text(encoding="utf-8") == "value = 1\n"
 
     resumed = workflow.run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True, run_id=first.run_id, resume=True)
@@ -126,6 +128,8 @@ def test_live_edit_resume_replays_checksum_validated_patches(tmp_path):
     assert (tmp_path / "src" / "app.py").read_text(encoding="utf-8") == "value = 1\n"
     events = (run_dir / "events.jsonl").read_text(encoding="utf-8")
     assert "proposal_replayed" in events and "patch_replay_completed" in events
+    deleted_branch = subprocess.run(["git", "-C", str(tmp_path), "branch", "--list", f"repo-dev/{first.run_id}"], capture_output=True, text=True, check=True)
+    assert deleted_branch.stdout.strip() == ""
 
 
 def test_live_edit_resume_blocks_tampered_replay_artifact(tmp_path):
@@ -227,6 +231,7 @@ def test_live_proposal_workflow_only_changes_disposable_worktree(tmp_path):
     assert (tmp_path / "src" / "app.py").read_text() == "value = 1\n"
     assert (tmp_path / "runs" / result.run_id / "proposal.json").exists()
     assert (tmp_path / "runs" / result.run_id / "review_verdict.json").exists()
+    assert not subprocess.run(["git", "-C", str(tmp_path), "branch", "--list", f"repo-dev/{result.run_id}"], capture_output=True, text=True, check=True).stdout.strip()
 
 
 def test_malformed_proposal_uses_bounded_repair(tmp_path):

@@ -33,5 +33,24 @@ class WorktreeManager:
             raise RuntimeError(completed.stderr.strip()[:500] or "git worktree creation failed")
         return Worktree(path, branch, base_ref)
 
-    def remove(self, worktree: Worktree) -> None:
-        subprocess.run(["git", "-C", str(self.repository), "worktree", "remove", "--force", str(worktree.path)], capture_output=True, text=True, check=False)
+    def remove(self, worktree: Worktree, *, delete_branch: bool = False) -> bool:
+        """Remove a disposable worktree and optionally its generated branch.
+
+        Failed runs retain their branch for resume. Completed runs can delete
+        it safely, preventing unbounded ``repo-dev/<run-id>`` accumulation.
+        The method remains best-effort like the original lifecycle cleanup and
+        returns whether all requested cleanup steps succeeded.
+        """
+        if delete_branch and not worktree.branch.startswith("repo-dev/"):
+            raise ValueError("refusing to delete a non-runtime worktree branch")
+        removed = subprocess.run(
+            ["git", "-C", str(self.repository), "worktree", "remove", "--force", str(worktree.path)],
+            capture_output=True, text=True, check=False,
+        ).returncode == 0
+        if not delete_branch:
+            return removed
+        deleted = subprocess.run(
+            ["git", "-C", str(self.repository), "branch", "-D", worktree.branch],
+            capture_output=True, text=True, check=False,
+        ).returncode == 0
+        return removed and deleted

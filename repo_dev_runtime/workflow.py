@@ -298,10 +298,11 @@ class DevelopmentWorkflow:
                 if worktree is not None:
                     WorktreeManager(self.manifest.root).remove(worktree)
                 return WorkflowResult(run_id, "blocked", tuple(results), str(run_dir))
+        if worktree is not None:
+            cleaned = WorktreeManager(self.manifest.root).remove(worktree, delete_branch=True)
+            envelope.event("worktree_disposed", branch=worktree.branch, branch_deleted=cleaned)
         _write_artifact(envelope, "promotion.json", {"status": "pr_created" if pr else "ready_for_human_review", "merge": False, "pr_creation": bool(pr), "pull_request": pr})
         envelope.finalize({"schema": "RepoDev.WorkflowRun.v1", "run_id": run_id, "status": "ready_for_human_review", "repository": self.manifest.name, "roles": list(ROLES)})
-        if worktree is not None:
-            WorktreeManager(self.manifest.root).remove(worktree)
         return WorkflowResult(run_id, "ready_for_human_review", tuple(results), str(run_dir))
 
 
