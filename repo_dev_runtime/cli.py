@@ -16,6 +16,7 @@ from .runtimes.dry_run import DryRunRuntime
 from .runtimes.pr_agent_reviewer import PRAgentReviewerRuntime
 from .governance.policy import RuntimePolicy
 from .workflow import DevelopmentWorkflow
+from .scheduler import TaskStateStore
 from .integrations.github import GitHubPublisher
 from .integrations.obsidian import ObsidianHandoff
 from .handoff import render_handoff
@@ -67,6 +68,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     run.add_argument("--artifacts-root")
     run.add_argument("--write-handoff", action="store_true", help="write a redacted, one-way Markdown run handoff to an explicitly selected Obsidian vault")
     run.add_argument("--obsidian-vault", help="Obsidian vault root required by --write-handoff")
+    run.add_argument("--scheduler-state-file", help="atomic state file for an externally scheduled one-shot invocation; requires --schedule-key")
+    run.add_argument("--schedule-key", help="stable task identifier for --scheduler-state-file; completed keys are not rerun unless explicitly requested")
+    run.add_argument("--rerun-completed", action="store_true", help="allow an explicitly scheduled completed key to execute again")
     benchmark = sub.add_parser("benchmark", help="run the deterministic fixture benchmark against a coding-agent provider")
     benchmark.add_argument("--fixtures-root", help="temp directory root for synthetic fixture repos (defaults to the OS temp dir)")
     benchmark.add_argument("--fixture", action="append", choices=[case.fixture_id for case in FIXTURE_CASES], help="run only a named fixture; repeat to select several (default: all fixtures)")
@@ -137,6 +141,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.write_handoff and not args.obsidian_vault:
             print(json.dumps({"status": "blocked", "reason": "obsidian_vault_required_for_handoff"}, indent=2))
             return 1
+        if args.scheduler_state_file and not args.schedule_key:
+            print(json.dumps({"status": "blocked", "reason": "scheduler_state_requires_schedule_key"}, indent=2))
+            return 1
+        if args.schedule_key and not args.scheduler_state_file:
+            print(json.dumps({"status": "blocked", "reason": "schedule_key_requires_scheduler_state"}, indent=2))
+            return 1
+        state_store = None
+        if args.scheduler_state_file:
+            state_store = TaskStateStore(args.scheduler_state_file)
+            prior = state_store.load().get(args.schedule_key)
+            if prior and prior.get("status") == "succeeded" and not args.rerun_completed:
+                print(json.dumps({"status": "skipped", "reason": "scheduled_task_already_completed", "schedule_key": args.schedule_key}, indent=2))
+                return 0
+            state_store.update(args.schedule_key, "running", repository=manifest.name, prompt=args.prompt, run_id=args.run_id or "")
         artifacts_root = Path(args.artifacts_root).expanduser() if args.artifacts_root else Path.home() / ".repo-dev-runtime" / "runs" / manifest.name
         runtime = RuntimeRouter(default_registry(ollama_enabled=args.enable_ollama if args.live else None, aider_enabled=args.enable_aider if args.live else None, omniroute_enabled=args.enable_omniroute if args.live else None, hermes_enabled=args.enable_sidecars if args.live else None, deerflow_enabled=args.enable_sidecars if args.live else None, openclaw_enabled=args.enable_openclaw if args.live else None), policy=policy) if args.live else DryRunRuntime()
         reviewer_runtime = None
@@ -158,8 +176,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             result = DevelopmentWorkflow(manifest=manifest, policy=policy, runtime=runtime, reviewer_runtime=reviewer_runtime, artifacts_root=artifacts_root).run(prompt=args.prompt, base_ref=args.base_ref, dry_run=not args.live, run_id=args.run_id, resume=args.resume, approved=args.approve_paid, publisher=publisher, create_pr=args.create_pr, apply_edits=args.apply_edits, max_fix_attempts=args.max_fix_attempts)
         except (FileExistsError, FileNotFoundError, ValueError) as exc:
+            if state_store is not None:
+                state_store.update(args.schedule_key, "blocked", error_type=type(exc).__name__, detail=str(exc)[:500])
             print(json.dumps({"status": "blocked", "reason": "workflow_request_invalid", "detail": str(exc)}, indent=2))
             return 1
+        if state_store is not None:
+            state_store.update(
+                args.schedule_key,
+                "succeeded" if result.status in {"ready_for_human_review", "pr_created"} else "blocked",
+                repository=manifest.name,
+                run_id=result.run_id,
+                workflow_status=result.status,
+                artifact_dir=result.artifact_dir,
+            )
         handoff = {}
         if args.write_handoff:
             quality_path = Path(result.artifact_dir) / "quality.json"

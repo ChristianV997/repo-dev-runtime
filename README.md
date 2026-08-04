@@ -53,6 +53,12 @@ Use `run --write-handoff --obsidian-vault /path/to/vault` only when a
 redacted, generated Markdown summary should be mirrored into Obsidian. The
 run envelope remains the canonical record; the one-way handoff has no code,
 test, promotion, Git, or publishing authority.
+
+For external scheduling, invoke the normal `run` command with
+`--scheduler-state-file /safe/path/state.json --schedule-key nightly-review`.
+The runtime records atomic state and skips an already completed key by
+default. An OS scheduler supplies the cadence; this runtime deliberately
+does not run a daemon or make recurring, unbounded decisions itself.
 `repo_dev_runtime/scheduler.py`'s `TaskStateStore` is a standalone,
 independently tested one-shot task-state library available for callers who
 want it directly; the live workflow below does not use it, since its own

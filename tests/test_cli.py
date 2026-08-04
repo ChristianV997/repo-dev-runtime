@@ -91,6 +91,39 @@ def test_run_handoff_writes_only_to_explicit_obsidian_vault(tmp_path, capsys):
     assert vault.resolve() in handoff.resolve().parents
 
 
+def test_scheduled_run_requires_paired_state_and_key(tmp_path, capsys):
+    code, payload = _run_cli([
+        "run", str(tmp_path), "--prompt", "inspect", "--scheduler-state-file", str(tmp_path / "state.json"),
+        "--artifacts-root", str(tmp_path / "artifacts"),
+    ], capsys)
+    assert code == 1
+    assert payload["reason"] == "scheduler_state_requires_schedule_key"
+
+    code, payload = _run_cli([
+        "run", str(tmp_path), "--prompt", "inspect", "--schedule-key", "nightly",
+        "--artifacts-root", str(tmp_path / "artifacts"),
+    ], capsys)
+    assert code == 1
+    assert payload["reason"] == "schedule_key_requires_scheduler_state"
+
+
+def test_scheduled_run_records_success_and_skips_completed_key(tmp_path, capsys):
+    state_path = tmp_path / "state.json"
+    args = [
+        "run", str(tmp_path), "--prompt", "inspect", "--scheduler-state-file", str(state_path),
+        "--schedule-key", "nightly", "--artifacts-root", str(tmp_path / "artifacts"),
+    ]
+    code, payload = _run_cli(args, capsys)
+    assert code == 0
+    assert payload["status"] == "ready_for_human_review"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["nightly"]["status"] == "succeeded"
+
+    code, payload = _run_cli(args, capsys)
+    assert code == 0
+    assert payload == {"status": "skipped", "reason": "scheduled_task_already_completed", "schedule_key": "nightly"}
+
+
 def test_cli_enable_openclaw_flag_is_wired_into_default_registry(tmp_path, monkeypatch):
     """Regression test: cli.py had no --enable-openclaw flag at all, so
     default_registry() was always called with openclaw_enabled unset
