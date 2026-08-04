@@ -4,7 +4,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .repository_map import MAX_MAP_FILE_BYTES, SKIP_DIRS, build_repository_map, path_allowed, rank_entries, render_repository_map
+from .path_policy import path_allowed
+from .repository_map import MAX_MAP_FILE_BYTES, SKIP_DIRS, build_repository_map, rank_entries, render_repository_map
 
 
 _TEXT_SUFFIXES = {".md", ".txt", ".toml", ".json", ".yaml", ".yml", ".py", ".js", ".ts", ".tsx", ".jsx", ".sh", ".ps1", ".css", ".html"}

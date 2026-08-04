@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 from ..governance.policy import RuntimePolicy
+from ..path_policy import path_allowed
 from ..tools.runner import run_command
 
 
@@ -73,10 +74,7 @@ class GitHubPublisher:
 
     @staticmethod
     def _allowed_path(path: str, allowed: tuple[str, ...], forbidden: tuple[str, ...]) -> bool:
-        parts = set(Path(path).parts)
-        if any(item in parts or path.startswith(item.rstrip("/") + "/") for item in forbidden):
-            return False
-        return "." in allowed or any(path == item or path.startswith(item.rstrip("/") + "/") for item in allowed)
+        return path_allowed(path, allowed, forbidden, empty_allowed=False)
 
     def _owner_repo(self, repository: str | Path) -> tuple[str, str]:
         import subprocess

@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
 from .contracts.models import now_iso, sha256_json
+from .path_policy import path_allowed
 
 SCHEMA = "RepoDev.EditProposal.v1"
 FORMATS = {"search_replace", "whole_file"}
@@ -174,12 +175,9 @@ class PatchApplier:
             raise PatchValidationError(WORKTREE_ESCAPE_MESSAGE)
         # A manifest's "." scope means the repository root. Auto-detected
         # manifests intentionally use it to permit normal in-worktree edits.
-        if self.allowed_paths and "." not in self.allowed_paths and not any(
-            relative == p or relative.startswith(p.rstrip("/") + "/")
-            for p in self.allowed_paths
-        ):
+        if self.allowed_paths and not path_allowed(relative, self.allowed_paths, ()):
             raise PatchValidationError(f"path is outside allowed_paths: {relative}")
-        if any(part.lower() in self.forbidden_paths for part in PurePosixPath(relative).parts):
+        if not path_allowed(relative, (), self.forbidden_paths):
             raise PatchValidationError(f"forbidden path: {relative}")
         return path
 

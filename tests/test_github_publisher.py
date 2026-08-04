@@ -79,6 +79,11 @@ def test_create_from_worktree_rejects_a_change_outside_allowed_paths(tmp_path):
         )
 
 
+def test_changed_path_policy_is_case_insensitive_and_rejects_forbidden_segments():
+    assert GitHubPublisher._allowed_path("SRC/main.py", ("src",), ())
+    assert not GitHubPublisher._allowed_path("Secrets/token.txt", (".",), ("secrets",))
+
+
 def test_create_from_worktree_surfaces_git_add_failure(tmp_path, monkeypatch):
     _init_repo(tmp_path)
     (tmp_path / "changed.py").write_text("x = 1\n", encoding="utf-8")
