@@ -42,6 +42,20 @@ def test_router_prefers_explicitly_enabled_aider_for_implementation():
     assert router.route(task) == "aider"
 
 
+def test_router_excludes_implementer_from_reviewer_selection():
+    class AiderFake(FakeRuntime):
+        name = "aider"
+
+        def health(self):
+            return RuntimeHealth("aider", True, True, ("sandboxed_editing",))
+
+    policy = RuntimePolicy(allow_ollama=True, allow_aider=True)
+    router = RuntimeRouter(RuntimeRegistry({"aider": AiderFake(), "ollama": FakeRuntime()}), policy=policy)
+    task = DevTask(task_id="t", repository="r", base_ref="HEAD", role="reviewer", prompt="x")
+
+    assert router.route(task, excluded=("aider",)) == "ollama"
+
+
 def test_router_does_not_route_aider_without_explicit_policy():
     class AiderFake(FakeRuntime):
         name = "aider"

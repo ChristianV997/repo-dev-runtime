@@ -47,14 +47,46 @@ class ProposalRuntime:
         if task.role == "implementer":
             base = re.search(r"base_commit=([0-9a-f]+)", task.prompt).group(1)
             context = re.search(r"context_hash=([0-9a-f]+)", task.prompt).group(1)
-            return DevResult(task.task_id, "fake", "succeeded", output=json.dumps({
+            return DevResult(task.task_id, "implementer_provider", "succeeded", output=json.dumps({
                 "schema": "RepoDev.EditProposal.v1", "proposal_id": "proposal-1", "task_id": task.task_id,
                 "base_commit": base, "context_hash": context, "summary": "change value",
                 "edits": [{"path": "src/app.py", "format": "search_replace", "search": "value = 1", "replace": "value = 2"}],
             }))
         if task.role == "reviewer":
-            return DevResult(task.task_id, "fake", "succeeded", output='{"schema":"RepoDev.ReviewVerdict.v1","approved":true,"summary":"safe","findings":[]}')
+            return DevResult(task.task_id, "reviewer_provider", "succeeded", output='{"schema":"RepoDev.ReviewVerdict.v1","approved":true,"summary":"safe","findings":[]}')
         return DevResult(task.task_id, "fake", "succeeded", output=task.role)
+
+
+class SameProviderReviewRuntime(ProposalRuntime):
+    """A provider may not approve the patch it just proposed."""
+
+    def execute(self, task):
+        result = super().execute(task)
+        if task.role in {"implementer", "reviewer"}:
+            return DevResult(
+                result.task_id,
+                "same_provider",
+                result.status,
+                result.output,
+                result.changed_files,
+                result.commit_sha,
+                result.tests,
+                result.telemetry,
+                result.error_type,
+                result.error_message,
+                result.created_at,
+            )
+        return result
+
+
+class EvidenceCapturingReviewerRuntime(ProposalRuntime):
+    def __init__(self):
+        self.reviewer_prompt = ""
+
+    def execute(self, task):
+        if task.role == "reviewer":
+            self.reviewer_prompt = task.prompt
+        return super().execute(task)
 
 
 class MalformedThenRepairRuntime(ProposalRuntime):
@@ -385,6 +417,56 @@ def test_live_proposal_workflow_only_changes_disposable_worktree(tmp_path):
     assert (tmp_path / "runs" / result.run_id / "proposal.json").exists()
     assert (tmp_path / "runs" / result.run_id / "review_verdict.json").exists()
     assert not subprocess.run(["git", "-C", str(tmp_path), "branch", "--list", f"repo-dev/{result.run_id}"], capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_live_edit_requires_independent_post_quality_reviewer(tmp_path):
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "initial"], check=True)
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=("src",), test_command=("git", "status", "--short"))
+    runtime = EvidenceCapturingReviewerRuntime()
+
+    result = DevelopmentWorkflow(
+        manifest=manifest,
+        policy=RuntimePolicy(),
+        runtime=runtime,
+        artifacts_root=tmp_path / "runs",
+    ).run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True)
+
+    assert result.status == "ready_for_human_review"
+    assert "Quality:" in runtime.reviewer_prompt
+    assert "Final diff:" in runtime.reviewer_prompt
+    assert "value = 2" in runtime.reviewer_prompt
+    artifact_dir = tmp_path / "runs" / result.run_id
+    assert (artifact_dir / "review_verdict.json").exists()
+    assert (artifact_dir / "reviewer.json").exists()
+
+
+def test_live_edit_blocks_self_review_before_promotion(tmp_path):
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "initial"], check=True)
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=("src",), test_command=("git", "status", "--short"))
+
+    result = DevelopmentWorkflow(
+        manifest=manifest,
+        policy=RuntimePolicy(),
+        runtime=SameProviderReviewRuntime(),
+        artifacts_root=tmp_path / "runs",
+    ).run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True)
+
+    assert result.status == "blocked"
+    promotion = json.loads((tmp_path / "runs" / result.run_id / "promotion.json").read_text(encoding="utf-8"))
+    assert promotion["status"] == "blocked"
+    assert promotion["quality"]["reason"] == "final_review_invalid"
 
 
 def test_malformed_proposal_uses_bounded_repair(tmp_path):

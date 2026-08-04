@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Collection, Mapping
 
 from ..contracts.models import DevResult, DevTask, RuntimeHealth
 from ..governance.policy import RuntimePolicy
@@ -119,13 +119,26 @@ class RuntimeRouter:
         self._available_cache_at = now
         return available
 
-    def route(self, task: DevTask, *, approved: bool = False) -> str | None:
+    def route(
+        self,
+        task: DevTask,
+        *,
+        approved: bool = False,
+        excluded: Collection[str] = (),
+    ) -> str | None:
+        """Select an authorized provider, excluding prior actors when needed.
+
+        Workflows use this for the final review gate so an implementer cannot
+        approve its own patch merely because it remains the highest-priority
+        runtime for the reviewer role.
+        """
         task.validate()
         if self.calls >= self.routing.max_calls:
             return None
         available = set(self._available())
+        excluded_names = set(excluded)
         for candidate in self.routing.preferred_by_role.get(task.role, ("ollama",)):
-            if candidate not in available:
+            if candidate not in available or candidate in excluded_names:
                 continue
             if candidate == "openai_compatible" or candidate in {"hermes", "deerflow"}:
                 self.policy.authorize("paid_routing", approved=approved)
@@ -134,9 +147,15 @@ class RuntimeRouter:
             return candidate
         return None
 
-    def execute(self, task: DevTask, *, approved: bool = False) -> DevResult:
+    def execute(
+        self,
+        task: DevTask,
+        *,
+        approved: bool = False,
+        excluded: Collection[str] = (),
+    ) -> DevResult:
         try:
-            name = self.route(task, approved=approved)
+            name = self.route(task, approved=approved, excluded=excluded)
         except PermissionError as exc:
             return DevResult(task.task_id, "router", "blocked", error_type="policy_denied", error_message=redact_text(str(exc)[:500]))
         if name is None:
