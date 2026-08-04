@@ -82,7 +82,13 @@ class PRAgentReviewAdapter:
             blocked = missing_credential_result(provider=self.name, name=self.required_credential)
             return EvalResult(request_id=request.request_id, provider=self.name, status=blocked["status"], error_type=blocked["error_type"], error_message=blocked["error_message"])
 
-        payload = {"schema": "RepoDev.PRAgentReviewRequest.v1", "request_id": request.request_id, "objective": request.objective, "diff": request.diff}
+        payload = {
+            "schema": "RepoDev.PRAgentReviewRequest.v1",
+            "request_id": request.request_id,
+            "objective": request.objective,
+            "diff": request.diff,
+            "base_files": dict(request.base_files),
+        }
         allowlist = CredentialAllowlist(provider=self.name, env_prefixes=("PR_AGENT_",))
         environment = build_subprocess_env(allowlist)
         try:

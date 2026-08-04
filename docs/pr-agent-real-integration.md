@@ -71,18 +71,19 @@ not content-based" section):
 Anyone relying on this mapping for real promotion gating should read this
 section, not just trust the boolean.
 
-## Known limitation: diff must be new-file-only (usually)
+## Bounded baseline context for modified-file diffs
 
-The bridge receives only a diff string (`EvalRequest.diff`), never the
-original repository — that's a deliberate reviewer-isolation boundary
-(see `docs/reviewer-independence.md`). It materializes a throwaway git
-repo with one placeholder `README.md`, then `git apply`s the diff. Diffs
-that only **add new files** apply cleanly. Diffs that **modify existing
-files** need matching base content this bridge doesn't have, and `git
-apply` fails — surfaced as a clear non-zero exit and stderr message
-(`"diff could not be applied against this bridge's minimal scaffold
-repo"`), never a fabricated review. `tests/test_pr_agent_real_bridge.py`
-exercises this exact failure path.
+The bridge never receives a consumer checkout path. For a changed text
+file, the harness may send only that file's pre-change content in
+`EvalRequest.base_files`; the bridge writes those contents to its throwaway
+repository before applying the diff. This is sufficient for ordinary
+modified-file review while preserving the reviewer-isolation boundary (see
+`docs/reviewer-independence.md`).
+
+The mapping is bounded to 1 MiB, accepts only relative POSIX text paths,
+and excludes new files, binary files, forbidden paths, and anything outside
+the changed diff. If a patch needs baseline content that is absent, `git
+apply` fails with a non-zero exit and no verdict is fabricated.
 
 ## Bugs found while building this (all reproduced against the real package)
 

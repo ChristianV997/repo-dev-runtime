@@ -49,6 +49,53 @@ def _git_worktree_diff(worktree_path: Path) -> str:
     return result.stdout
 
 
+def _git_base_files_for_diff(
+    worktree_path: Path,
+    *,
+    max_bytes: int = 1_000_000,
+    forbidden_paths: tuple[str, ...] = (),
+) -> dict[str, str]:
+    """Return changed files' baseline text without exposing a checkout path.
+
+    A reviewer gets only the pre-change content needed to apply its diff in
+    an isolated scratch repository. New files have no baseline and are
+    omitted. Non-text and over-budget inputs fail closed by omission: the
+    bridge will reject an inapplicable diff rather than widening access.
+    """
+    listed = subprocess.run(
+        ["git", "-C", str(worktree_path), "diff", "--name-only", "-z", "HEAD"],
+        capture_output=True, check=False,
+    )
+    if listed.returncode != 0:
+        return {}
+    files: dict[str, str] = {}
+    total = 0
+    forbidden = {part.lower() for part in forbidden_paths}
+    for raw_name in listed.stdout.split(b"\0"):
+        if not raw_name:
+            continue
+        try:
+            name = raw_name.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        path_parts = Path(name).parts
+        if not name or name.startswith("/") or "\\" in name or ".." in path_parts or any(part.lower() in forbidden for part in path_parts):
+            continue
+        baseline = subprocess.run(["git", "-C", str(worktree_path), "show", f"HEAD:{name}"], capture_output=True, check=False)
+        if baseline.returncode != 0:
+            continue
+        try:
+            content = baseline.stdout.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        size = len(baseline.stdout)
+        if total + size > max_bytes:
+            continue
+        files[name] = content
+        total += size
+    return files
+
+
 def _classify_provider_output(result, applier: PatchApplier) -> tuple[str, bool | None, tuple[str, ...], str, str, tuple[str, ...]]:
     """Returns (outcome, proposal_valid, changed_files, error_type, error_message, attempted_paths)."""
     if result.status != "succeeded":
@@ -144,7 +191,12 @@ def run_fixture_case(
         reviewer_approved: bool | None = None
         if outcome == "succeeded" and case.needs_reviewer and reviewer_adapter is not None:
             diff_text = _git_worktree_diff(worktree.path)
-            eval_request = EvalRequest.create(kind="reviewer", objective=case.prompt, diff=diff_text)
+            eval_request = EvalRequest.create(
+                kind="reviewer",
+                objective=case.prompt,
+                diff=diff_text,
+                base_files=_git_base_files_for_diff(worktree.path, forbidden_paths=case.forbidden_paths),
+            )
             eval_result = reviewer_adapter(eval_request)
             if eval_result.status == "succeeded":
                 reviewer_approved = bool(eval_result.normalized.get("approved"))
