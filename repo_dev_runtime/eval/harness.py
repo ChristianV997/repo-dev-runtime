@@ -17,7 +17,6 @@ from ..context import build_adaptive_context
 from ..contracts.models import DevTask, sha256_json
 from ..governance.credentials import redact_text
 from ..edits import WORKTREE_ESCAPE_MESSAGE, PatchApplier, PatchValidationError, parse_edit_proposal
-from ..governance.credentials import redact_text
 from ..runtimes.base import DevelopmentRuntime
 from ..tools.runner import run_command
 from ..workspaces import WorktreeManager
