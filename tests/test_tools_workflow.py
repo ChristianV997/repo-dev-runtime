@@ -120,7 +120,7 @@ def test_runner_timeout_terminates_child_process_tree(tmp_path):
     result = run_command([sys.executable, str(script)], cwd=tmp_path, timeout_s=0.2)
 
     assert result.timed_out is True
-    assert result.returncode is not None
+    assert result.returncode is None
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline and not child_pid_file.exists():
         time.sleep(0.02)

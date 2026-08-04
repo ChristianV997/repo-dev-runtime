@@ -7,7 +7,7 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from ..governance.command_policy import CommandPolicy, evaluate_command
 from ..governance.credentials import redact_text
@@ -20,19 +20,36 @@ class CommandResult:
     stdout: str
     stderr: str
     timed_out: bool = False
+    output_truncated: bool = False
 
 
-def run_command(command: Sequence[str], *, cwd: str | Path, timeout_s: float = 120.0, max_output_bytes: int = 512_000, network_access: bool = False, allow_branch_publish: bool = False) -> CommandResult:
+def run_command(
+    command: Sequence[str],
+    *,
+    cwd: str | Path,
+    timeout_s: float = 120.0,
+    max_output_bytes: int = 512_000,
+    network_access: bool = False,
+    allow_branch_publish: bool = False,
+    input_text: str | None = None,
+    environment: Mapping[str, str] | None = None,
+    enforce_policy: bool = True,
+) -> CommandResult:
     if not command or any(not isinstance(item, str) or not item for item in command):
         raise ValueError("command must be a non-empty sequence of strings")
     if not 0.001 <= float(timeout_s):
         raise ValueError("timeout_s must be positive")
     if max_output_bytes < 1:
         raise ValueError("max_output_bytes must be positive")
-    decision = evaluate_command(shlex.join(command), CommandPolicy(allow_network=network_access, allow_branch_publish=allow_branch_publish))
-    if not decision.allowed:
-        raise PermissionError(decision.reason)
-    environment = {key: value for key, value in os.environ.items() if key not in {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"}}
+    if enforce_policy:
+        decision = evaluate_command(shlex.join(command), CommandPolicy(allow_network=network_access, allow_branch_publish=allow_branch_publish))
+        if not decision.allowed:
+            raise PermissionError(decision.reason)
+    child_environment = environment if environment is not None else {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"}
+    }
     launch_kwargs: dict[str, object] = {}
     if os.name == "nt":
         launch_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -41,24 +58,38 @@ def run_command(command: Sequence[str], *, cwd: str | Path, timeout_s: float = 1
     process = subprocess.Popen(
         list(command),
         cwd=str(Path(cwd).resolve()),
+        stdin=subprocess.PIPE if input_text is not None else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         shell=False,
-        env=environment,
+        env=child_environment,
         **launch_kwargs,
     )
     try:
-        stdout, stderr = process.communicate(timeout=timeout_s)
-        stdout = redact_text(_bounded_text(stdout, max_output_bytes))
-        stderr = redact_text(_bounded_text(stderr, max_output_bytes))
-        return CommandResult(tuple(command), process.returncode, stdout, stderr)
+        stdout, stderr = process.communicate(input=input_text, timeout=timeout_s)
+        stdout, stdout_truncated = _bounded_text(stdout, max_output_bytes)
+        stderr, stderr_truncated = _bounded_text(stderr, max_output_bytes)
+        return CommandResult(
+            tuple(command),
+            process.returncode,
+            redact_text(stdout),
+            redact_text(stderr),
+            output_truncated=stdout_truncated or stderr_truncated,
+        )
     except subprocess.TimeoutExpired as exc:
         _terminate_process_tree(process)
         trailing_stdout, trailing_stderr = process.communicate()
-        stdout = _bounded_text(_coerce_output(exc.stdout) + _coerce_output(trailing_stdout), max_output_bytes)
-        stderr = _bounded_text(_coerce_output(exc.stderr) + _coerce_output(trailing_stderr), max_output_bytes)
-        return CommandResult(tuple(command), process.returncode, redact_text(stdout), redact_text(stderr), True)
+        stdout, stdout_truncated = _bounded_text(_coerce_output(exc.stdout) + _coerce_output(trailing_stdout), max_output_bytes)
+        stderr, stderr_truncated = _bounded_text(_coerce_output(exc.stderr) + _coerce_output(trailing_stderr), max_output_bytes)
+        return CommandResult(
+            tuple(command),
+            None,
+            redact_text(stdout),
+            redact_text(stderr),
+            timed_out=True,
+            output_truncated=stdout_truncated or stderr_truncated,
+        )
 
 
 def _coerce_output(value: object) -> str:
@@ -69,11 +100,12 @@ def _coerce_output(value: object) -> str:
     return str(value)
 
 
-def _bounded_text(value: object, max_output_bytes: int) -> str:
+def _bounded_text(value: object, max_output_bytes: int) -> tuple[str, bool]:
     if max_output_bytes < 1:
         raise ValueError("max_output_bytes must be positive")
     text = _coerce_output(value)
-    return text.encode("utf-8", errors="replace")[:max_output_bytes].decode("utf-8", errors="replace")
+    encoded = text.encode("utf-8", errors="replace")
+    return encoded[:max_output_bytes].decode("utf-8", errors="replace"), len(encoded) > max_output_bytes
 
 
 def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
