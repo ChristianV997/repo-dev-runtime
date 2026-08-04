@@ -38,6 +38,27 @@ def test_router_requires_paid_approval():
     assert router.route(task, approved=True) == "openai_compatible"
 
 
+def test_router_caches_health_probes_with_explicit_invalidation():
+    class CountingRuntime(FakeRuntime):
+        def __init__(self):
+            self.health_calls = 0
+
+        def health(self):
+            self.health_calls += 1
+            return super().health()
+
+    runtime = CountingRuntime()
+    router = RuntimeRouter(RuntimeRegistry({"ollama": runtime}), policy=RuntimePolicy(allow_ollama=True), health_cache_ttl_s=30)
+    task = DevTask(task_id="t", repository="r", base_ref="HEAD", role="planner", prompt="x")
+
+    assert router.route(task) == "ollama"
+    assert router.route(task) == "ollama"
+    assert runtime.health_calls == 1
+    router.invalidate_health_cache()
+    assert router.route(task) == "ollama"
+    assert runtime.health_calls == 2
+
+
 def test_workflow_resume_skips_completed_roles(tmp_path):
     manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=(".",))
     run_root = tmp_path.parent / "run-artifacts"
