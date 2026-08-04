@@ -73,6 +73,8 @@ class RuntimeRegistry:
                 continue
             if name == "deerflow" and not policy.allow_omniroute:
                 continue
+            if name == "openclaw" and not policy.allow_openclaw:
+                continue
             available.append(name)
         return tuple(available)
 

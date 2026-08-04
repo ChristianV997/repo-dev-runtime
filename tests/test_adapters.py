@@ -24,6 +24,26 @@ def test_disabled_runtimes_fail_closed():
     assert DeerFlowRuntime(enabled=False).execute(task()).status == "skipped"
 
 
+def test_openclaw_is_reachable_through_the_default_registry_and_health_output():
+    """Regression test: README.md advertises OpenClaw as an optional
+    sidecar alongside Hermes/DeerFlow, but default_registry() never
+    imported or registered OpenClawRuntime and cli.py had no
+    --enable-openclaw flag - health/run --live could never even see it.
+    OpenClaw still defaults to disabled and fails closed either way; this
+    only proves it is now reachable from the entry points a user actually
+    uses, not that it is enabled by default."""
+    from repo_dev_runtime.runtimes.factory import default_registry
+
+    registry = default_registry()
+    assert "openclaw" in registry._runtimes
+    assert isinstance(registry.get("openclaw"), OpenClawRuntime)
+
+    health = registry.health()
+    assert "openclaw" in health
+    assert health["openclaw"].configured is False
+    assert health["openclaw"].reachable is False
+
+
 def test_hermes_normalizes_openai_response():
     def fake_request(*args):
         return {"choices": [{"message": {"content": "plan"}}]}

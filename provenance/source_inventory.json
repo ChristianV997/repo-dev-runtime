@@ -73,7 +73,7 @@
       "source_repository": "Aider-AI/aider",
       "source_url": "https://github.com/Aider-AI/aider",
       "license": "Apache-2.0",
-      "status": "reference",
+      "status": "reviewed",
       "capability": "repository maps, focused context, reversible Git-oriented edits",
       "adaptation": "implemented a read-only static repository map and bounded objective-ranked context; later added a disabled-by-default Aider subprocess adapter (runtimes/aider.py) that runs only in a copied temporary sandbox and translates its diff into the existing EditProposal contract; no Aider source code vendored and it is not in default routing"
     },

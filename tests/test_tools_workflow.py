@@ -3,6 +3,7 @@ import json
 import re
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -405,3 +406,63 @@ def test_resuming_a_completed_create_pr_run_does_not_publish_a_second_pull_reque
     assert resumed.status == "ready_for_human_review"
     assert calls["create_pull_request"] == 1, "resuming an already-completed create_pr run must not publish a second pull request"
     assert calls["publish_branch"] == 1
+
+
+def test_resuming_a_completed_create_pr_run_without_create_pr_flag_preserves_original_pr_record(tmp_path, monkeypatch):
+    """Regression test: the prior fix for the duplicate-PR bug only
+    guarded the case where the *resume* call itself also passed
+    create_pr=True. But a run that originally completed with
+    create_pr=True (promotion.json status "pr_created") can later be
+    resumed with --resume and no --create-pr at all (e.g. an operator
+    just wants to inspect/replay the run). Nothing checked whether the
+    run itself had already reached a terminal success state before
+    falling through to build a brand-new worktree/branch (the original
+    was already deleted on success - see
+    WorktreeManager.remove(delete_branch=True)), re-run quality checks,
+    and overwrite promotion.json with {"status": "ready_for_human_review"},
+    destroying the record that a PR was actually created, including its
+    URL/number. The short-circuit must key off the run's own recorded
+    completion status, independent of this call's create_pr value."""
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "initial"], check=True)
+
+    calls = {"create_pull_request": 0, "publish_branch": 0}
+
+    def fake_publish_branch(self, *, repository, branch, base="main"):
+        calls["publish_branch"] += 1
+        return {"branch": branch, "base": base, "pushed": True}
+
+    def fake_create_pull_request(self, *, repository, branch, base, title, body):
+        calls["create_pull_request"] += 1
+        return {"url": f"https://example.invalid/pr/{calls['create_pull_request']}", "number": calls["create_pull_request"], "branch": branch, "base": base}
+
+    monkeypatch.setattr(GitHubPublisher, "publish_branch", fake_publish_branch)
+    monkeypatch.setattr(GitHubPublisher, "create_pull_request", fake_create_pull_request)
+
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=("src",), test_command=("git", "status", "--short"), pull_request_creation=True)
+    policy = RuntimePolicy(allow_pr_creation=True, allow_branch_publish=True)
+    publisher = GitHubPublisher(policy=policy, token="fake-token")
+    workflow = DevelopmentWorkflow(manifest=manifest, policy=policy, runtime=ProposalRuntime(), artifacts_root=tmp_path / "runs")
+
+    first = workflow.run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True, create_pr=True, publisher=publisher)
+    assert first.status == "ready_for_human_review"
+    assert calls["create_pull_request"] == 1
+    assert calls["publish_branch"] == 1
+
+    run_dir = Path(first.artifact_dir)
+    original_promotion = json.loads((run_dir / "promotion.json").read_text(encoding="utf-8"))
+    assert original_promotion["status"] == "pr_created"
+
+    resumed = workflow.run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True, create_pr=False, publisher=publisher, run_id=first.run_id, resume=True)
+    assert resumed.status == "ready_for_human_review"
+    assert calls["create_pull_request"] == 1, "resuming without create_pr must not publish a second pull request"
+    assert calls["publish_branch"] == 1, "resuming without create_pr must not push a second branch"
+
+    reloaded_promotion = json.loads((run_dir / "promotion.json").read_text(encoding="utf-8"))
+    assert reloaded_promotion["status"] == "pr_created", "resuming without create_pr must not overwrite the original pr_created record"
+    assert reloaded_promotion.get("pull_request") == original_promotion.get("pull_request"), "the original PR url/number must be preserved across a non-create_pr resume"

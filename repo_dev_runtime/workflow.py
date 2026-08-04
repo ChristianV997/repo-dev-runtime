@@ -179,35 +179,32 @@ class DevelopmentWorkflow:
         )
         if resume:
             _verify_resume_request(run_id, run_dir, request_hash)
-        if resume and create_pr:
-            # A resumed run with create_pr=True that already reached a
-            # success terminal state (promotion.json's "status", not
-            # WorkflowResult.status, which is always "ready_for_human_review"
-            # on success) must not call create_from_worktree again - the
-            # prior worktree/branch may already be deleted (see
-            # WorktreeManager.remove(delete_branch=True) below), so
-            # re-running would build a brand-new branch and publish a
-            # second, duplicate pull request. This check is scoped to
-            # create_pr specifically: a plain resume (no create_pr) of an
-            # already-completed run is harmless and already correctly
-            # idempotent via the per-role cache below - short-circuiting
-            # unconditionally here would (and did, during development)
-            # break that existing, safe behavior. Only "blocked" terminal
-            # states fall through to a real retry, which is the whole point
-            # of --resume.
+        # A resumed run that already reached a success terminal state
+        # (promotion.json's "status", not WorkflowResult.status, which is
+        # always "ready_for_human_review" on success) must not build a new
+        # worktree, re-run quality checks, or call create_from_worktree
+        # again - independent of what create_pr/apply_edits this particular
+        # resume call happens to pass. The original worktree/branch may
+        # already be deleted (see WorktreeManager.remove(delete_branch=True)
+        # below), so falling through would build a brand-new branch from
+        # base_ref and, if create_pr is set this time, publish a second,
+        # duplicate pull request - and even without create_pr, it would
+        # silently overwrite promotion.json, destroying the record that a
+        # PR was already created (its URL/number). This check deliberately
+        # does not depend on this call's create_pr value: a run's own
+        # completion status is the only thing that matters. Only a
+        # "blocked" terminal state falls through to a real retry, which is
+        # the whole point of --resume. (Scoping this to create_pr, as an
+        # earlier version of this check did, missed exactly this case.)
+        already_completed = False
+        if resume:
             promotion_path = run_dir / "promotion.json"
             if promotion_path.exists():
                 try:
                     cached_promotion = json.loads(promotion_path.read_text(encoding="utf-8"))
                 except json.JSONDecodeError:
                     cached_promotion = {}
-                if cached_promotion.get("status") in {"pr_created", "ready_for_human_review"}:
-                    cached_results = tuple(
-                        DevResult(**json.loads((run_dir / f"{role}.json").read_text(encoding="utf-8")))
-                        for role in ROLES
-                        if (run_dir / f"{role}.json").exists()
-                    )
-                    return WorkflowResult(run_id, "ready_for_human_review", cached_results, str(run_dir))
+                already_completed = cached_promotion.get("status") in {"pr_created", "ready_for_human_review"}
         envelope = RunEnvelope(run_id, run_dir)
         if not resume:
             _write_artifact(envelope, _REQUEST_ARTIFACT, {
@@ -219,7 +216,7 @@ class DevelopmentWorkflow:
         previous: list[str] = []
         worktree_path = self.manifest.root
         worktree = None
-        if not dry_run:
+        if not dry_run and not already_completed:
             try:
                 worktree = WorktreeManager(self.manifest.root).create(run_id=run_id, base_ref=base_ref)
                 worktree_path = str(worktree.path)
@@ -319,6 +316,11 @@ class DevelopmentWorkflow:
                     WorktreeManager(self.manifest.root).remove(worktree)
                 return WorkflowResult(run_id, "blocked", tuple(results), str(run_dir))
             previous.append(task.task_id)
+        if already_completed:
+            # All 5 roles replayed from cache above (nothing new executed,
+            # no worktree touched); return the already-recorded outcome
+            # rather than re-running quality checks or the create_pr block.
+            return WorkflowResult(run_id, "ready_for_human_review", tuple(results), str(run_dir))
         quality = run_quality_checks(self.manifest, cwd=worktree_path, dry_run=dry_run, policy=self.policy)
         repairs_applied = False
         for attempt in range(max_fix_attempts):
