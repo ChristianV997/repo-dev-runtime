@@ -74,7 +74,14 @@ def test_live_aider_edits_require_an_independent_reviewer_provider(tmp_path, cap
     ], capsys)
 
     assert code == 1
-    assert payload["reason"] == "aider_requires_independent_reviewer_provider"
+    assert payload["reason"] == "aider_requires_routable_core_and_independent_reviewer"
+
+    code, payload = _run_cli([
+        "run", str(tmp_path), "--prompt", "inspect", "--live", "--enable-aider", "--enable-ollama", "--apply-edits",
+        "--artifacts-root", str(tmp_path / "artifacts"),
+    ], capsys)
+    assert code == 1
+    assert payload["reason"] == "aider_requires_routable_core_and_independent_reviewer"
 
 
 def test_run_handoff_requires_explicit_vault(tmp_path, capsys):

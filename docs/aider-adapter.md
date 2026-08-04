@@ -58,7 +58,8 @@ An expanded multi-fixture run exceeded a 15-minute outer bound, so this
 configuration is not suitable for default automation or broad campaign use.
 
 For an ordinary governed `run --live --apply-edits`, `--enable-aider` also
-requires a separately enabled reviewer provider (`--enable-ollama`,
-`--enable-omniroute`, `--enable-sidecars`, or `--enable-pr-agent`). The
-workflow excludes the implementer from final review and blocks promotion if
-no independent verdict is available.
+requires both a general core provider (`--enable-ollama` or
+`--enable-omniroute`) for planner/tester/integrator roles and an independent
+reviewer (`--enable-omniroute` or `--enable-pr-agent`). The workflow excludes
+the implementer from final review and blocks promotion if no independent
+verdict is available.

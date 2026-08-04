@@ -132,11 +132,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.enable_pr_agent and not args.approve_external_review:
             print(json.dumps({"status": "blocked", "reason": "pr_agent_requires_explicit_approval"}, indent=2))
             return 1
-        if args.enable_aider and args.apply_edits and not (
-            args.enable_ollama or args.enable_omniroute or args.enable_sidecars or args.enable_pr_agent
-        ):
-            print(json.dumps({"status": "blocked", "reason": "aider_requires_independent_reviewer_provider"}, indent=2))
-            return 1
+        if args.enable_aider and args.apply_edits:
+            # Aider supplies only the implementer role. The workflow still
+            # needs a general runtime for planner/tester/integrator and a
+            # distinct final reviewer. Sidecars cannot fill tester/integrator,
+            # and Ollama alone cannot independently review itself.
+            has_core_roles = args.enable_ollama or args.enable_omniroute
+            has_independent_reviewer = args.enable_omniroute or args.enable_pr_agent
+            if not has_core_roles or not has_independent_reviewer:
+                print(json.dumps({"status": "blocked", "reason": "aider_requires_routable_core_and_independent_reviewer"}, indent=2))
+                return 1
         if args.enable_pr_agent:
             try:
                 policy.authorize("pr_agent_review", approved=True)
