@@ -199,18 +199,13 @@ def test_hermes_execute_classifies_malformed_json_default_request_path():
 
 
 def test_hermes_execute_classifies_oversized_response_as_truncated_json():
-    # Unlike Ollama/OpenAI-compatible, HermesRuntime's `_post_json` has no
-    # explicit max_output_bytes check — it reads a hardcoded 2,000,001-byte
-    # cap and whatever gets truncated mid-string fails JSON parsing. This is
-    # a real, undocumented behavioral difference from the other adapters
-    # (worth knowing, not fixed here), so this test asserts the real
-    # observed classification rather than an explicit "oversized" ValueError.
+    # The shared helper enforces the task output budget before JSON parsing.
     hermes_oversized_body = b'{"choices":[{"message":{"content":"' + b"a" * 2_100_000 + b'"}}]}'
     with stub_server({("POST", "/v1/chat/completions"): raw_response(200, hermes_oversized_body)}) as server:
         runtime = HermesRuntime(base_url=server.base_url, enabled=True)
         result = runtime.execute(_task())
     assert result.status == "failed"
-    assert result.error_type == "JSONDecodeError"
+    assert result.error_type == "ValueError"
 
 
 def test_hermes_execute_classifies_timeout_default_request_path():
