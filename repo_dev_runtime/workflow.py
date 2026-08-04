@@ -6,7 +6,7 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Collection
 
 from .contracts.models import DevResult, DevTask
 from .governance.artifacts import RunEnvelope
@@ -17,9 +17,9 @@ from .tools.runner import run_command
 from .runtimes.registry import RuntimeRouter
 from .workspaces import WorktreeManager
 from .integrations.github import GitHubPublisher
-from .context import build_adaptive_context
 from .contracts.models import sha256_json
 from .edits import PatchApplier, PatchValidationError, parse_edit_proposal
+from .eval.context_providers import ContextProvider, StaticMapContextProvider, resolve_context_provider
 from .review import ReviewValidationError, parse_review_verdict
 
 
@@ -92,11 +92,17 @@ def _verify_resume_request(envelope: RunEnvelope, run_dir: Path, expected_hash: 
         raise ValueError("resume request does not match the original run")
 
 
-def _execute_runtime(runtime: object, task: DevTask, *, approved: bool) -> DevResult:
+def _execute_runtime(
+    runtime: object,
+    task: DevTask,
+    *,
+    approved: bool,
+    excluded_providers: Collection[str] = (),
+) -> DevResult:
     """Normalize provider exceptions at the workflow boundary."""
     try:
         if isinstance(runtime, RuntimeRouter):
-            result = runtime.execute(task, approved=approved)
+            result = runtime.execute(task, approved=approved, excluded=excluded_providers)
         else:
             result = runtime.execute(task)  # type: ignore[attr-defined]
         if not isinstance(result, DevResult):
@@ -154,13 +160,68 @@ class WorkflowResult:
 
 
 class DevelopmentWorkflow:
-    def __init__(self, *, manifest: RepoManifest, policy: RuntimePolicy, runtime: object, artifacts_root: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        manifest: RepoManifest,
+        policy: RuntimePolicy,
+        runtime: object,
+        reviewer_runtime: object | None = None,
+        context_provider: ContextProvider | None = None,
+        artifacts_root: str | Path | None = None,
+    ) -> None:
         manifest.validate()
         policy.validate()
         self.manifest = manifest
         self.policy = policy
         self.runtime = runtime
+        # A router can select a different provider after excluding the
+        # implementer. A dedicated reviewer adapter (for example PR-Agent)
+        # may be supplied here instead, but it still has to identify itself
+        # differently in its DevResult.
+        self.reviewer_runtime = reviewer_runtime or runtime
+        self.context_provider = context_provider or StaticMapContextProvider()
         self.artifacts_root = Path(artifacts_root or Path(manifest.root) / ".dev-runtime" / "runs")
+
+    def _independent_reviewer_available(self) -> bool:
+        """Whether a genuinely different reviewer could plausibly be picked.
+
+        The final-review gate below excludes the implementer's provider
+        from the reviewer role and hard-fails if the reviewer result still
+        reports that same provider. But excluding a provider only produces
+        a different result when a second one actually exists: a single
+        runtime object (the primary --live --apply-edits path - one
+        adapter, no router, no distinct reviewer_runtime) reports the same
+        fixed self.name for every role regardless of exclusion, so the
+        gate would raise "implementer cannot review its own patch" on
+        every run and the workflow could never promote or create a PR.
+        True when a distinct reviewer_runtime was explicitly configured
+        (e.g. a PR-Agent bridge - always independent by construction), or
+        when self.runtime is a RuntimeRouter with >=2 authorized, reachable
+        candidates for the reviewer role.
+        """
+        if self.reviewer_runtime is not self.runtime:
+            return True
+        if isinstance(self.runtime, RuntimeRouter):
+            return len(self.runtime.available_providers_for_role("reviewer")) >= 2
+        return False
+
+    def _build_context(self, root: str, *, objective: str) -> tuple[str, str, str]:
+        """Build bounded context through the configured provider or fallback.
+
+        Rich providers are optional helpers. Any provider failure is recorded
+        by the selected provider name and falls back to the deterministic,
+        dependency-free repository map rather than failing an otherwise safe
+        run or silently omitting context.
+        """
+        return resolve_context_provider(
+            self.context_provider,
+            root=root,
+            objective=objective,
+            allowed_paths=self.manifest.allowed_paths,
+            forbidden_paths=self.manifest.forbidden_paths,
+            max_bytes=self.manifest.context_max_bytes,
+        )
 
     def run(self, *, prompt: str, base_ref: str = "HEAD", dry_run: bool = True, run_id: str | None = None, resume: bool = False, approved: bool = False, publisher: GitHubPublisher | None = None, create_pr: bool = False, apply_edits: bool = False, max_fix_attempts: int = 0) -> WorkflowResult:
         if apply_edits and dry_run:
@@ -239,12 +300,28 @@ class DevelopmentWorkflow:
                 if worktree is not None:
                     WorktreeManager(self.manifest.root).remove(worktree)
                 return WorkflowResult(run_id, "blocked", (), str(run_dir))
-        repository_context, repository_map = build_adaptive_context(worktree_path, objective=prompt, allowed_paths=self.manifest.allowed_paths, forbidden_paths=self.manifest.forbidden_paths, max_bytes=self.manifest.context_max_bytes)
+        repository_context, repository_map, context_provider_used = self._build_context(worktree_path, objective=prompt)
         context_hash = sha256_json(repository_context)
         _write_artifact(envelope, "repository_map.txt", {"map": repository_map})
-        envelope.event("context_captured", context_hash=context_hash, context_bytes=len(repository_context.encode("utf-8")))
+        _write_artifact(envelope, "context_provider.json", {
+            "requested": self.context_provider.name,
+            "used": context_provider_used,
+            "capabilities": dict(self.context_provider.capabilities()),
+        })
+        envelope.event("context_captured", context_hash=context_hash, context_bytes=len(repository_context.encode("utf-8")), provider=context_provider_used)
         for role in ROLES:
             role_path = run_dir / f"{role}.json"
+            # Live edits are reviewed only after final quality evidence is
+            # available. On resume, retain the completed final review record.
+            if apply_edits and role == "reviewer":
+                if resume and role_path.exists():
+                    cached = DevResult(**json.loads(role_path.read_text(encoding="utf-8")))
+                    cached.validate()
+                    if cached.status == "succeeded":
+                        results.append(cached)
+                        previous.append(cached.task_id)
+                        envelope.event("task_resumed", task_id=cached.task_id, role=role, status=cached.status)
+                continue
             if resume and role_path.exists():
                 cached = DevResult(**json.loads(role_path.read_text(encoding="utf-8")))
                 cached.validate()
@@ -259,8 +336,6 @@ class DevelopmentWorkflow:
             if apply_edits and role == "implementer":
                 head = subprocess.check_output(["git", "-C", worktree_path, "rev-parse", "HEAD"], text=True).strip()
                 contract = f"\n\nReturn only one JSON object using schema RepoDev.EditProposal.v1. It must contain proposal_id, task_id={task_id}, base_commit={head}, context_hash={context_hash}, summary, and non-empty edits. Each edit is search_replace or whole_file and must be within allowed paths. Do not use markdown fences."
-            if apply_edits and role == "reviewer":
-                contract = "\n\nReturn only one JSON object using schema RepoDev.ReviewVerdict.v1 with approved, summary, and findings. Do not use markdown fences. Approval is permitted only when the diff is safe and the stated quality evidence is adequate."
             role_prompt = f"Role: {role}\nYou are one stage in a governed coding workflow. Do not claim commands or tests you did not run. Do not edit files directly.{contract}\n\nObjective:\n{prompt}\n\nRepository context:\n{repository_context}{context}"
             task = DevTask(task_id=task_id, repository=worktree_path, base_ref=base_ref, role=role, prompt=role_prompt, acceptance=("return a structured result",), allowed_paths=self.manifest.allowed_paths, dry_run=dry_run, approval_state="approved" if approved else "not_required")
             task.validate()
@@ -305,15 +380,6 @@ class DevelopmentWorkflow:
                             envelope.event("proposal_repair_rejected", task_id=repair_task.task_id, attempt=repair_attempt + 1, error_type=type(repair_exc).__name__)
                     if not repaired:
                         result = DevResult(result.task_id, result.runtime, "blocked", result.output, error_type=type(exc).__name__, error_message=str(exc))
-            if apply_edits and role == "reviewer" and result.status == "succeeded":
-                try:
-                    verdict = parse_review_verdict(result.output)
-                    _write_artifact(envelope, "review_verdict.json", verdict.to_dict())
-                    if not verdict.approved:
-                        result = DevResult(result.task_id, result.runtime, "blocked", result.output, error_type="review_not_approved", error_message=verdict.summary)
-                    envelope.event("review_recorded", task_id=result.task_id, approved=verdict.approved, findings=len(verdict.findings))
-                except ReviewValidationError as exc:
-                    result = DevResult(result.task_id, result.runtime, "blocked", result.output, error_type=type(exc).__name__, error_message=str(exc))
             results.append(result)
             _write_artifact(envelope, f"{role}.json", result.to_dict())
             envelope.event("task_finished", task_id=task.task_id, role=role, status=result.status)
@@ -331,14 +397,18 @@ class DevelopmentWorkflow:
             # rather than re-running quality checks or the create_pr block.
             return WorkflowResult(run_id, "ready_for_human_review", tuple(results), str(run_dir))
         quality = run_quality_checks(self.manifest, cwd=worktree_path, dry_run=dry_run, policy=self.policy)
-        repairs_applied = False
+        implementer_provider = next(
+            (item.runtime for item in reversed(results) if item.changed_files),
+            "",
+        )
         for attempt in range(max_fix_attempts):
             if quality["status"] == "passed":
                 break
             if not apply_edits:
                 break
-            retry_context, retry_map = build_adaptive_context(worktree_path, objective=prompt + " repair failed quality checks", allowed_paths=self.manifest.allowed_paths, forbidden_paths=self.manifest.forbidden_paths, max_bytes=self.manifest.context_max_bytes)
+            retry_context, _, retry_provider_used = self._build_context(worktree_path, objective=prompt + " repair failed quality checks")
             retry_hash = sha256_json(retry_context)
+            envelope.event("repair_context_captured", context_hash=retry_hash, provider=retry_provider_used, context_bytes=len(retry_context.encode("utf-8")))
             head = subprocess.check_output(["git", "-C", worktree_path, "rev-parse", "HEAD"], text=True).strip()
             repair_task_id = uuid.uuid4().hex
             repair_prompt = f"Role: implementer\nReturn only RepoDev.EditProposal.v1 JSON. Repair these quality failures, using a minimal patch. task_id={repair_task_id}; base_commit={head}; context_hash={retry_hash}.\n\nQuality:\n{json.dumps(quality, sort_keys=True)[:8000]}\n\nContext:\n{retry_context}"
@@ -355,27 +425,58 @@ class DevelopmentWorkflow:
                 _write_artifact(envelope, f"repair_{attempt + 1}.json", result.to_dict())
                 envelope.event("repair_applied", task_id=result.task_id, attempt=attempt + 1, changed_files=list(applied.changed_files))
                 results.append(result)
-                repairs_applied = True
+                implementer_provider = result.runtime
             except (PatchValidationError, ReviewValidationError, UnicodeDecodeError) as exc:
                 envelope.event("repair_rejected", task_id=result.task_id, attempt=attempt + 1, error_type=type(exc).__name__)
                 break
             quality = run_quality_checks(self.manifest, cwd=worktree_path, dry_run=False, policy=self.policy)
-        if repairs_applied and quality["status"] == "passed":
+        if apply_edits and quality["status"] == "passed":
             review_task_id = uuid.uuid4().hex
-            review_prompt = f"Role: reviewer\nReturn only RepoDev.ReviewVerdict.v1 JSON with approved, summary, and findings. Review the final worktree diff after repair proposals and the passed quality result.\n\nObjective:\n{prompt}\n\nQuality:\n{json.dumps(quality, sort_keys=True)[:8000]}"
+            final_diff = subprocess.check_output(
+                ["git", "-C", worktree_path, "diff", "--no-ext-diff", "--unified=3"],
+                text=True,
+            )
+            review_prompt = f"Role: reviewer\nReturn only RepoDev.ReviewVerdict.v1 JSON with approved, summary, and findings. Independently review the final worktree diff and passed quality evidence. Approval is permitted only when the patch is safe and the evidence is adequate.\n\nObjective:\n{prompt}\n\nQuality:\n{json.dumps(quality, sort_keys=True)[:8000]}\n\nFinal diff:\n{final_diff[:24000]}"
             task = DevTask(task_id=review_task_id, repository=worktree_path, base_ref=base_ref, role="reviewer", prompt=review_prompt, acceptance=("return a structured final review",), allowed_paths=self.manifest.allowed_paths, dry_run=False)
             task.validate()
-            result = _execute_runtime(self.runtime, task, approved=approved)
+            independent_reviewer_available = implementer_provider and self._independent_reviewer_available()
+            result = _execute_runtime(
+                self.reviewer_runtime,
+                task,
+                approved=approved,
+                excluded_providers=(implementer_provider,) if independent_reviewer_available else (),
+            )
             try:
+                if result.status != "succeeded":
+                    raise ReviewValidationError("independent reviewer did not produce a successful verdict")
+                if not implementer_provider:
+                    raise ReviewValidationError("no applied implementer provider was recorded")
+                self_reviewed = result.runtime == implementer_provider
+                if self_reviewed and independent_reviewer_available:
+                    raise ReviewValidationError("implementer cannot review its own patch")
                 verdict = parse_review_verdict(result.output)
+                _write_artifact(envelope, "review_verdict.json", verdict.to_dict())
                 _write_artifact(envelope, "final_review_verdict.json", verdict.to_dict())
-                envelope.event("final_review_recorded", task_id=task.task_id, approved=verdict.approved, findings=len(verdict.findings))
+                envelope.event("final_review_recorded", task_id=task.task_id, approved=verdict.approved, findings=len(verdict.findings), self_reviewed=self_reviewed)
+                if self_reviewed:
+                    # No independent reviewer was structurally available
+                    # (single-provider setup). Blocking here permanently
+                    # would deadlock every such run with no security
+                    # benefit - quality checks already ran, and there is no
+                    # second party to defer to. Record it for a human to
+                    # see instead of silently treating it as independent.
+                    envelope.event("self_reviewed_warning", task_id=task.task_id, runtime=result.runtime)
                 if not verdict.approved:
                     quality = {"status": "failed", "checks": quality.get("checks", {}), "reason": "final_review_not_approved"}
+                    result = DevResult(result.task_id, result.runtime, "blocked", result.output, error_type="review_not_approved", error_message=verdict.summary)
                 results.append(result)
+                _write_artifact(envelope, "reviewer.json", result.to_dict())
             except ReviewValidationError as exc:
                 envelope.event("final_review_rejected", task_id=task.task_id, error_type=type(exc).__name__)
                 quality = {"status": "failed", "checks": quality.get("checks", {}), "reason": "final_review_invalid"}
+                result = DevResult(result.task_id, result.runtime, "blocked", result.output, error_type=type(exc).__name__, error_message=str(exc))
+                results.append(result)
+                _write_artifact(envelope, "reviewer.json", result.to_dict())
         _write_artifact(envelope, "quality.json", quality)
         if quality["status"] != "passed":
             _write_artifact(envelope, "promotion.json", {"status": "blocked", "reason": "quality_checks_failed", "quality": quality})

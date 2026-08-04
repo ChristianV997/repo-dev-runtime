@@ -29,6 +29,45 @@ def test_router_prefers_available_local_runtime():
     assert router.execute(task).status == "succeeded"
 
 
+def test_router_prefers_explicitly_enabled_aider_for_implementation():
+    class AiderFake(FakeRuntime):
+        name = "aider"
+
+        def health(self):
+            return RuntimeHealth("aider", True, True, ("sandboxed_editing",))
+
+    policy = RuntimePolicy(allow_ollama=True, allow_aider=True)
+    router = RuntimeRouter(RuntimeRegistry({"aider": AiderFake(), "ollama": FakeRuntime()}), policy=policy)
+    task = DevTask(task_id="t", repository="r", base_ref="HEAD", role="implementer", prompt="x")
+    assert router.route(task) == "aider"
+
+
+def test_router_excludes_implementer_from_reviewer_selection():
+    class AiderFake(FakeRuntime):
+        name = "aider"
+
+        def health(self):
+            return RuntimeHealth("aider", True, True, ("sandboxed_editing",))
+
+    policy = RuntimePolicy(allow_ollama=True, allow_aider=True)
+    router = RuntimeRouter(RuntimeRegistry({"aider": AiderFake(), "ollama": FakeRuntime()}), policy=policy)
+    task = DevTask(task_id="t", repository="r", base_ref="HEAD", role="reviewer", prompt="x")
+
+    assert router.route(task, excluded=("aider",)) == "ollama"
+
+
+def test_router_does_not_route_aider_without_explicit_policy():
+    class AiderFake(FakeRuntime):
+        name = "aider"
+
+        def health(self):
+            return RuntimeHealth("aider", True, True, ("sandboxed_editing",))
+
+    router = RuntimeRouter(RuntimeRegistry({"aider": AiderFake()}), policy=RuntimePolicy())
+    task = DevTask(task_id="t", repository="r", base_ref="HEAD", role="implementer", prompt="x")
+    assert router.route(task) is None
+
+
 def test_router_requires_paid_approval():
     policy = RuntimePolicy(allow_omniroute=True, allow_paid_routing=True)
     router = RuntimeRouter(RuntimeRegistry({"openai_compatible": FakeRuntime()}), policy=policy)

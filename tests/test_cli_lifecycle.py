@@ -47,10 +47,21 @@ class FakeOllamaRuntime:
         return DevResult(task.task_id, "ollama", "succeeded", output=task.role)
 
 
+class FakeIndependentReviewerRuntime:
+    name = "openai_compatible"
+
+    def health(self) -> RuntimeHealth:
+        return RuntimeHealth(name=self.name, configured=True, reachable=True)
+
+    def execute(self, task):
+        assert task.role == "reviewer"
+        return DevResult(task.task_id, self.name, "succeeded", output='{"schema":"RepoDev.ReviewVerdict.v1","approved":true,"summary":"safe","findings":[]}')
+
+
 @pytest.fixture
 def fake_default_registry(monkeypatch):
     def spying_default_registry(**_kwargs):
-        return RuntimeRegistry({"ollama": FakeOllamaRuntime()})
+        return RuntimeRegistry({"ollama": FakeOllamaRuntime(), "openai_compatible": FakeIndependentReviewerRuntime()})
 
     monkeypatch.setattr(cli, "default_registry", spying_default_registry)
 
@@ -112,7 +123,7 @@ def test_full_consumer_lifecycle_through_the_real_cli_entry_points(tmp_path, cap
     # implementer proposal applied and merged back via fast-forward.
     code, live_result = _run_cli([
         "run", str(repo), "--prompt", "change value", "--base-ref", "main",
-        "--live", "--enable-ollama", "--apply-edits",
+        "--live", "--enable-ollama", "--enable-omniroute", "--approve-paid", "--apply-edits",
         "--artifacts-root", str(artifacts_root),
     ], capsys)
     assert code == 0
@@ -125,7 +136,7 @@ def test_full_consumer_lifecycle_through_the_real_cli_entry_points(tmp_path, cap
     # rebuilding a worktree or re-running quality checks.
     code, resumed_result = _run_cli([
         "run", str(repo), "--prompt", "change value", "--base-ref", "main",
-        "--live", "--enable-ollama", "--apply-edits", "--resume",
+        "--live", "--enable-ollama", "--enable-omniroute", "--approve-paid", "--apply-edits", "--resume",
         "--run-id", run_id, "--artifacts-root", str(artifacts_root),
     ], capsys)
     assert code == 0
@@ -148,7 +159,7 @@ def test_full_consumer_lifecycle_through_the_real_cli_entry_points(tmp_path, cap
 
     code, pr_result = _run_cli([
         "run", str(repo), "--prompt", "change value again", "--base-ref", "main",
-        "--live", "--enable-ollama", "--apply-edits", "--create-pr",
+        "--live", "--enable-ollama", "--enable-omniroute", "--approve-paid", "--apply-edits", "--create-pr",
         "--artifacts-root", str(artifacts_root),
     ], capsys)
     assert code == 0

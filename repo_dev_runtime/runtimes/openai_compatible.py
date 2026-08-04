@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 
 from ..contracts.models import DevResult, DevTask, RuntimeHealth
 from ..governance.credentials import redact_text
+from .structured_output import openai_response_format
 
 
 class OpenAICompatibleRuntime:
@@ -33,6 +34,9 @@ class OpenAICompatibleRuntime:
         if not self.enabled:
             return DevResult(task.task_id, self.name, "skipped", error_type="runtime_disabled")
         payload = {"model": task.model if task.model != "default" else self.model, "messages": [{"role": "user", "content": task.prompt}], "stream": False}
+        response_format = openai_response_format(task.role)
+        if response_format is not None:
+            payload["response_format"] = response_format
         headers = {"Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"

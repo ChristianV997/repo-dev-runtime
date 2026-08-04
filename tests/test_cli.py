@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -50,6 +51,127 @@ def fast_benchmark(monkeypatch):
     monkeypatch.setattr(cli, "run_fixture_benchmark", run_fixture_benchmark)
 
 
+def test_run_pr_agent_requires_live_edits_and_explicit_approval(tmp_path, capsys):
+    code, payload = _run_cli([
+        "run", str(tmp_path), "--prompt", "inspect", "--enable-pr-agent",
+        "--artifacts-root", str(tmp_path / "artifacts"),
+    ], capsys)
+    assert code == 1
+    assert payload["reason"] == "pr_agent_requires_live_apply_edits"
+
+    code, payload = _run_cli([
+        "run", str(tmp_path), "--prompt", "inspect", "--live", "--apply-edits", "--enable-pr-agent",
+        "--artifacts-root", str(tmp_path / "artifacts"),
+    ], capsys)
+    assert code == 1
+    assert payload["reason"] == "pr_agent_requires_explicit_approval"
+
+
+def test_live_aider_edits_require_an_independent_reviewer_provider(tmp_path, capsys):
+    code, payload = _run_cli([
+        "run", str(tmp_path), "--prompt", "inspect", "--live", "--enable-aider", "--apply-edits",
+        "--artifacts-root", str(tmp_path / "artifacts"),
+    ], capsys)
+
+    assert code == 1
+    assert payload["reason"] == "aider_requires_routable_core_and_independent_reviewer"
+
+    code, payload = _run_cli([
+        "run", str(tmp_path), "--prompt", "inspect", "--live", "--enable-aider", "--enable-ollama", "--apply-edits",
+        "--artifacts-root", str(tmp_path / "artifacts"),
+    ], capsys)
+    assert code == 1
+    assert payload["reason"] == "aider_requires_routable_core_and_independent_reviewer"
+
+
+def test_run_handoff_requires_explicit_vault(tmp_path, capsys):
+    code, payload = _run_cli([
+        "run", str(tmp_path), "--prompt", "inspect", "--write-handoff",
+        "--artifacts-root", str(tmp_path / "artifacts"),
+    ], capsys)
+
+    assert code == 1
+    assert payload["reason"] == "obsidian_vault_required_for_handoff"
+
+
+def test_run_handoff_writes_only_to_explicit_obsidian_vault(tmp_path, capsys):
+    vault = tmp_path / "vault"
+    code, payload = _run_cli([
+        "run", str(tmp_path), "--prompt", "inspect", "--write-handoff",
+        "--obsidian-vault", str(vault), "--artifacts-root", str(tmp_path / "artifacts"),
+    ], capsys)
+
+    assert code == 0
+    assert payload["handoff"]["status"] == "written"
+    handoff = Path(payload["handoff"]["path"])
+    assert handoff.is_file()
+    assert vault.resolve() in handoff.resolve().parents
+
+
+def test_scheduled_run_requires_paired_state_and_key(tmp_path, capsys):
+    code, payload = _run_cli([
+        "run", str(tmp_path), "--prompt", "inspect", "--scheduler-state-file", str(tmp_path / "state.json"),
+        "--artifacts-root", str(tmp_path / "artifacts"),
+    ], capsys)
+    assert code == 1
+    assert payload["reason"] == "scheduler_state_requires_schedule_key"
+
+    code, payload = _run_cli([
+        "run", str(tmp_path), "--prompt", "inspect", "--schedule-key", "nightly",
+        "--artifacts-root", str(tmp_path / "artifacts"),
+    ], capsys)
+    assert code == 1
+    assert payload["reason"] == "schedule_key_requires_scheduler_state"
+
+
+def test_scheduled_run_records_success_and_skips_completed_key(tmp_path, capsys):
+    state_path = tmp_path / "state.json"
+    args = [
+        "run", str(tmp_path), "--prompt", "inspect", "--scheduler-state-file", str(state_path),
+        "--schedule-key", "nightly", "--artifacts-root", str(tmp_path / "artifacts"),
+    ]
+    code, payload = _run_cli(args, capsys)
+    assert code == 0
+    assert payload["status"] == "ready_for_human_review"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["nightly"]["status"] == "succeeded"
+
+    code, payload = _run_cli(args, capsys)
+    assert code == 0
+    assert payload == {"status": "skipped", "reason": "scheduled_task_already_completed", "schedule_key": "nightly"}
+
+
+def test_scheduled_run_uses_the_atomic_claim_not_a_separate_load_and_update(tmp_path, capsys, monkeypatch):
+    """Regression test: the scheduler wiring used to call
+    state_store.load() and state_store.update(..., "running") as two
+    separate lock acquisitions - a TOCTOU window where two concurrent
+    invocations sharing --schedule-key could both observe the task as
+    unclaimed and both proceed. It must go through the single atomic
+    claim() call instead."""
+    from repo_dev_runtime.scheduler import TaskStateStore
+
+    calls = []
+    real_claim = TaskStateStore.claim
+
+    def spying_claim(self, *args, **kwargs):
+        calls.append((args, kwargs))
+        return real_claim(self, *args, **kwargs)
+
+    monkeypatch.setattr(TaskStateStore, "load", lambda self: (_ for _ in ()).throw(AssertionError("load() must not be called directly; use claim()")))
+    monkeypatch.setattr(TaskStateStore, "claim", spying_claim)
+
+    state_path = tmp_path / "state.json"
+    code, payload = _run_cli([
+        "run", str(tmp_path), "--prompt", "inspect", "--scheduler-state-file", str(state_path),
+        "--schedule-key", "nightly", "--artifacts-root", str(tmp_path / "artifacts"),
+    ], capsys)
+
+    assert code == 0
+    assert payload["status"] == "ready_for_human_review"
+    assert len(calls) == 1
+    assert calls[0][0][:2] == ("nightly", "running")
+
+
 def test_cli_enable_openclaw_flag_is_wired_into_default_registry(tmp_path, monkeypatch):
     """Regression test: cli.py had no --enable-openclaw flag at all, so
     default_registry() was always called with openclaw_enabled unset
@@ -72,6 +194,22 @@ def test_cli_enable_openclaw_flag_is_wired_into_default_registry(tmp_path, monke
     ])
 
     assert captured.get("openclaw_enabled") is True
+
+
+def test_cli_enable_aider_flag_is_wired_into_default_registry(tmp_path, monkeypatch):
+    captured = {}
+    real_default_registry = cli.default_registry
+
+    def spying_default_registry(**kwargs):
+        captured.update(kwargs)
+        return real_default_registry(**kwargs)
+
+    monkeypatch.setattr(cli, "default_registry", spying_default_registry)
+    cli.main([
+        "run", str(tmp_path), "--prompt", "inspect", "--live", "--enable-aider",
+        "--artifacts-root", str(tmp_path / "artifacts"),
+    ])
+    assert captured.get("aider_enabled") is True
 
 
 def test_cli_dry_run_is_provider_independent(tmp_path):

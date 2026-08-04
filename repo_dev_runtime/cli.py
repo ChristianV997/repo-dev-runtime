@@ -13,15 +13,20 @@ from .discovery import probe_repository, validate_consumer
 from .runtimes.factory import default_registry
 from .runtimes.registry import RuntimeRouter
 from .runtimes.dry_run import DryRunRuntime
+from .runtimes.pr_agent_reviewer import PRAgentReviewerRuntime
 from .governance.policy import RuntimePolicy
 from .workflow import DevelopmentWorkflow
+from .scheduler import TaskStateStore
 from .integrations.github import GitHubPublisher
+from .integrations.obsidian import ObsidianHandoff
+from .handoff import render_handoff
 from .eval.fakes import FakePRAgentAdapter, default_fake_provider_factory
 from .eval.fixtures import FIXTURE_CASES
 from .eval.harness import aggregate_scorecard, run_fixture_benchmark
 from .eval.loader import ProviderLoadError, load_provider
 from .eval.provider_specs import default_provider_specs
 from .eval.report import append_history, render_json_report, render_markdown_report
+from .governance.provider_admission import evaluate_limited_pilot_admission
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -49,14 +54,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     run.add_argument("--resume", action="store_true")
     run.add_argument("--live", action="store_true")
     run.add_argument("--enable-ollama", action="store_true")
+    run.add_argument("--enable-aider", action="store_true", help="enable the sandboxed Aider implementer; requires a separate planner/reviewer provider")
     run.add_argument("--enable-omniroute", action="store_true")
     run.add_argument("--enable-sidecars", action="store_true")
     run.add_argument("--enable-openclaw", action="store_true", help="reach the OpenClaw sidecar adapter; still fails closed (blocked) in v1 since its WebSocket client is unimplemented")
+    run.add_argument("--enable-pr-agent", action="store_true", help="use the configured PR-Agent bridge as the final independent reviewer; requires --live, --apply-edits, and --approve-external-review")
+    run.add_argument("--approve-external-review", action="store_true", help="explicit per-run approval for the opt-in external PR-Agent reviewer")
+    run.add_argument("--pr-agent-command", help="reviewer executable/command; overrides PR_AGENT_COMMAND")
+    run.add_argument("--pr-agent-required-credential", help="environment variable name required by the PR-Agent bridge")
     run.add_argument("--approve-paid", action="store_true")
     run.add_argument("--create-pr", action="store_true")
     run.add_argument("--apply-edits", action="store_true", help="accept only validated implementer proposals in a disposable worktree")
     run.add_argument("--max-fix-attempts", type=int, default=0, help="bounded repair proposals after failed quality checks (0-3)")
     run.add_argument("--artifacts-root")
+    run.add_argument("--write-handoff", action="store_true", help="write a redacted, one-way Markdown run handoff to an explicitly selected Obsidian vault")
+    run.add_argument("--obsidian-vault", help="Obsidian vault root required by --write-handoff")
+    run.add_argument("--scheduler-state-file", help="atomic state file for an externally scheduled one-shot invocation; requires --schedule-key")
+    run.add_argument("--schedule-key", help="stable task identifier for --scheduler-state-file; completed keys are not rerun unless explicitly requested")
+    run.add_argument("--rerun-completed", action="store_true", help="allow an explicitly scheduled completed key to execute again")
     benchmark = sub.add_parser("benchmark", help="run the deterministic fixture benchmark against a coding-agent provider")
     benchmark.add_argument("--fixtures-root", help="temp directory root for synthetic fixture repos (defaults to the OS temp dir)")
     benchmark.add_argument("--fixture", action="append", choices=[case.fixture_id for case in FIXTURE_CASES], help="run only a named fixture; repeat to select several (default: all fixtures)")
@@ -97,11 +112,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         allow_omniroute = args.enable_omniroute or args.enable_sidecars
         policy = RuntimePolicy(
             allow_ollama=args.enable_ollama,
+            allow_aider=args.enable_aider,
             allow_omniroute=allow_omniroute,
             allow_openclaw=args.enable_openclaw,
             allow_paid_routing=allow_paid,
             allow_pr_creation=args.create_pr and manifest.pull_request_creation,
             allow_branch_publish=args.create_pr and manifest.pull_request_creation,
+            allow_external_provider_benchmark=args.enable_pr_agent,
             network_access=args.live,
         )
         if args.create_pr and not manifest.pull_request_creation:
@@ -110,15 +127,116 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.apply_edits and not args.live:
             print(json.dumps({"status": "blocked", "reason": "apply_edits_requires_live"}, indent=2))
             return 1
+        if args.enable_pr_agent and (not args.live or not args.apply_edits):
+            print(json.dumps({"status": "blocked", "reason": "pr_agent_requires_live_apply_edits"}, indent=2))
+            return 1
+        if args.enable_pr_agent and not args.approve_external_review:
+            print(json.dumps({"status": "blocked", "reason": "pr_agent_requires_explicit_approval"}, indent=2))
+            return 1
+        if args.enable_aider and args.apply_edits:
+            # Aider supplies only the implementer role. The workflow still
+            # needs a general runtime for planner/tester/integrator and a
+            # distinct final reviewer. Sidecars cannot fill tester/integrator,
+            # and Ollama alone cannot independently review itself.
+            has_core_roles = args.enable_ollama or args.enable_omniroute
+            has_independent_reviewer = args.enable_omniroute or args.enable_pr_agent
+            if not has_core_roles or not has_independent_reviewer:
+                print(json.dumps({"status": "blocked", "reason": "aider_requires_routable_core_and_independent_reviewer"}, indent=2))
+                return 1
+        if args.enable_pr_agent:
+            try:
+                # The real gate is args.approve_external_review, checked
+                # just above. Hard-coding approved=True here would make
+                # this authorize() call tautological (satisfied by
+                # construction, since allow_external_provider_benchmark
+                # was itself set from args.enable_pr_agent above) - it
+                # must thread the actual per-run approval to add any
+                # defense-in-depth.
+                policy.authorize("pr_agent_review", approved=args.approve_external_review)
+            except PermissionError as exc:
+                print(json.dumps({"status": "blocked", "reason": str(exc)}, indent=2))
+                return 1
+        if args.write_handoff and not args.obsidian_vault:
+            print(json.dumps({"status": "blocked", "reason": "obsidian_vault_required_for_handoff"}, indent=2))
+            return 1
+        if args.scheduler_state_file and not args.schedule_key:
+            print(json.dumps({"status": "blocked", "reason": "scheduler_state_requires_schedule_key"}, indent=2))
+            return 1
+        if args.schedule_key and not args.scheduler_state_file:
+            print(json.dumps({"status": "blocked", "reason": "schedule_key_requires_scheduler_state"}, indent=2))
+            return 1
+        state_store = None
+        if args.scheduler_state_file:
+            state_store = TaskStateStore(args.scheduler_state_file)
+            # claim() performs the read and the conditional write inside a
+            # single lock acquisition. load() followed by a separate
+            # update() is two acquisitions, so two concurrent invocations
+            # sharing --schedule-key could both observe the task as
+            # unclaimed and both proceed to a full run.
+            guarded_statuses = () if args.rerun_completed else ("succeeded",)
+            claimed = state_store.claim(args.schedule_key, "running", unless_status=guarded_statuses, repository=manifest.name, prompt=args.prompt, run_id=args.run_id or "")
+            if claimed is None:
+                print(json.dumps({"status": "skipped", "reason": "scheduled_task_already_completed", "schedule_key": args.schedule_key}, indent=2))
+                return 0
         artifacts_root = Path(args.artifacts_root).expanduser() if args.artifacts_root else Path.home() / ".repo-dev-runtime" / "runs" / manifest.name
-        runtime = RuntimeRouter(default_registry(ollama_enabled=args.enable_ollama if args.live else None, omniroute_enabled=args.enable_omniroute if args.live else None, hermes_enabled=args.enable_sidecars if args.live else None, deerflow_enabled=args.enable_sidecars if args.live else None, openclaw_enabled=args.enable_openclaw if args.live else None), policy=policy) if args.live else DryRunRuntime()
+        runtime = RuntimeRouter(default_registry(ollama_enabled=args.enable_ollama if args.live else None, aider_enabled=args.enable_aider if args.live else None, omniroute_enabled=args.enable_omniroute if args.live else None, hermes_enabled=args.enable_sidecars if args.live else None, deerflow_enabled=args.enable_sidecars if args.live else None, openclaw_enabled=args.enable_openclaw if args.live else None), policy=policy) if args.live else DryRunRuntime()
+        reviewer_runtime = None
+        if args.enable_pr_agent:
+            from .eval.pr_agent import PRAgentReviewAdapter
+
+            adapter = PRAgentReviewAdapter(
+                command=shlex.split(args.pr_agent_command, posix=os.name != "nt") if args.pr_agent_command else None,
+                enabled=True,
+                required_credential=args.pr_agent_required_credential,
+                policy=policy,
+            )
+            health = adapter.health()
+            if not health.configured or not health.reachable:
+                print(json.dumps({"status": "blocked", "reason": "pr_agent_not_healthy", "detail": health.detail}, indent=2))
+                return 1
+            reviewer_runtime = PRAgentReviewerRuntime(adapter)
         publisher = GitHubPublisher(policy=policy) if args.create_pr else None
         try:
-            result = DevelopmentWorkflow(manifest=manifest, policy=policy, runtime=runtime, artifacts_root=artifacts_root).run(prompt=args.prompt, base_ref=args.base_ref, dry_run=not args.live, run_id=args.run_id, resume=args.resume, approved=args.approve_paid, publisher=publisher, create_pr=args.create_pr, apply_edits=args.apply_edits, max_fix_attempts=args.max_fix_attempts)
+            result = DevelopmentWorkflow(manifest=manifest, policy=policy, runtime=runtime, reviewer_runtime=reviewer_runtime, artifacts_root=artifacts_root).run(prompt=args.prompt, base_ref=args.base_ref, dry_run=not args.live, run_id=args.run_id, resume=args.resume, approved=args.approve_paid, publisher=publisher, create_pr=args.create_pr, apply_edits=args.apply_edits, max_fix_attempts=args.max_fix_attempts)
         except (FileExistsError, FileNotFoundError, ValueError) as exc:
+            if state_store is not None:
+                state_store.update(args.schedule_key, "blocked", error_type=type(exc).__name__, detail=str(exc)[:500])
             print(json.dumps({"status": "blocked", "reason": "workflow_request_invalid", "detail": str(exc)}, indent=2))
             return 1
-        print(json.dumps({"run_id": result.run_id, "status": result.status, "artifact_dir": result.artifact_dir, "results": [item.to_dict() for item in result.results]}, indent=2))
+        if state_store is not None:
+            state_store.update(
+                args.schedule_key,
+                "succeeded" if result.status in {"ready_for_human_review", "pr_created"} else "blocked",
+                repository=manifest.name,
+                run_id=result.run_id,
+                workflow_status=result.status,
+                artifact_dir=result.artifact_dir,
+            )
+        handoff = {}
+        if args.write_handoff:
+            quality_path = Path(result.artifact_dir) / "quality.json"
+            try:
+                quality = json.loads(quality_path.read_text(encoding="utf-8")) if quality_path.exists() else {}
+                next_action = "review the generated patch and run envelope" if result.status == "ready_for_human_review" else "inspect the blocked run envelope before retrying"
+                content = render_handoff(
+                    repository=manifest.name,
+                    run_id=result.run_id,
+                    status=result.status,
+                    next_action=next_action,
+                    tests=quality,
+                )
+                destination = ObsidianHandoff(args.obsidian_vault).write(
+                    f"repo-dev-runtime-{manifest.name}-{result.run_id}.md",
+                    content,
+                    dry_run=False,
+                )
+                handoff = {"path": str(destination), "status": "written"}
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                # The handoff is a non-authoritative convenience mirror. A
+                # failure must be visible but cannot change a completed run's
+                # promotion state or mutate its checksum-validated envelope.
+                handoff = {"status": "failed", "error_type": type(exc).__name__, "detail": str(exc)[:500]}
+        print(json.dumps({"run_id": result.run_id, "status": result.status, "artifact_dir": result.artifact_dir, "handoff": handoff, "results": [item.to_dict() for item in result.results]}, indent=2))
         return 0 if result.status in {"ready_for_human_review", "pr_created"} else 1
     if args.command == "benchmark":
         return _run_benchmark(args)
@@ -279,8 +397,9 @@ def _run_benchmark(args) -> int:
         if args.enable_mini_swe_agent:
             provider_specs.append(specs["mini_swe_agent"])
 
-    json_report = render_json_report(scorecards=[scorecard], fixture_results=results, provider_specs=provider_specs)
-    markdown_report = render_markdown_report(scorecards=[scorecard], fixture_results=results, provider_specs=provider_specs)
+    admission = evaluate_limited_pilot_admission(scorecard, results)
+    json_report = render_json_report(scorecards=[scorecard], fixture_results=results, provider_specs=provider_specs, admission_decisions=[admission])
+    markdown_report = render_markdown_report(scorecards=[scorecard], fixture_results=results, provider_specs=provider_specs, admission_decisions=[admission])
 
     if args.json_out:
         Path(args.json_out).write_text(json.dumps(json_report, indent=2), encoding="utf-8")

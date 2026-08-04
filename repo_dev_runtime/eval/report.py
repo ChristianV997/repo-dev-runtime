@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 
 from ..contracts.models import canonical_json
 from ..governance.credentials import redact_json
+from ..governance.provider_admission import ProviderAdmissionDecision
 from .models import BenchmarkProviderSpec, FixtureCaseResult, ProviderScorecard
 
 
@@ -18,12 +19,14 @@ def render_json_report(
     scorecards: Sequence[ProviderScorecard],
     fixture_results: Sequence[FixtureCaseResult],
     provider_specs: Sequence[BenchmarkProviderSpec] = (),
+    admission_decisions: Sequence[ProviderAdmissionDecision] = (),
 ) -> dict[str, Any]:
     payload = {
         "schema": "RepoDev.BenchmarkReport.v1",
         "scorecards": [s.to_dict() for s in scorecards],
         "fixture_results": [r.to_dict() for r in fixture_results],
         "provider_specs": [s.to_dict() for s in provider_specs],
+        "admission_decisions": [decision.to_dict() for decision in admission_decisions],
     }
     return redact_json(payload)
 
@@ -80,6 +83,7 @@ def render_markdown_report(
     scorecards: Sequence[ProviderScorecard],
     fixture_results: Sequence[FixtureCaseResult],
     provider_specs: Sequence[BenchmarkProviderSpec] = (),
+    admission_decisions: Sequence[ProviderAdmissionDecision] = (),
 ) -> str:
     lines = ["# Provider Benchmark Report", ""]
     if len(scorecards) > 1:
@@ -122,11 +126,21 @@ def render_markdown_report(
             lines.append(f"- license: {spec.license}, source: {spec.source_url}")
             lines.append("")
 
+    if admission_decisions:
+        lines.append("## Provider admission decisions")
+        lines.append("")
+        for decision in admission_decisions:
+            lines.append(f"- `{decision.provider}`: `{decision.status}`")
+            if decision.reasons:
+                lines.append(f"  reasons: {', '.join(decision.reasons)}")
+        lines.append("")
+
     lines.append("## Governance guarantees")
     lines.append("")
     lines.append("- This benchmark never pushes, merges, or creates a pull request.")
     lines.append("- External providers are opt-in and credential-free by default.")
     lines.append("- OpenHands and mini-SWE-agent are evaluation records only and are never part of default routing.")
+    lines.append("- A limited-pilot admission is not default routing and does not authorize edits, publication, or merge.")
     return "\n".join(lines) + "\n"
 
 
