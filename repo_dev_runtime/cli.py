@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Sequence
 
 from .manifest import load_manifest
 from .discovery import probe_repository, validate_consumer
@@ -25,7 +27,13 @@ from .eval.provider_specs import default_provider_specs
 from .eval.report import append_history, render_json_report, render_markdown_report
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the CLI.
+
+    ``argv`` keeps the console entry point unchanged while letting tests
+    exercise parsing and policy wiring without spawning a full fixture
+    benchmark process for every flag combination.
+    """
     parser = argparse.ArgumentParser(prog="repo-dev-runtime")
     sub = parser.add_subparsers(dest="command", required=True)
     probe = sub.add_parser("probe")
@@ -69,7 +77,7 @@ def main() -> int:
     benchmark.add_argument("--json-out")
     benchmark.add_argument("--markdown-out")
     benchmark.add_argument("--history-out", nargs="?", const="", help="append this run's JSON report as one JSONL line; defaults to ~/.repo-dev-runtime/eval-history/<date>.jsonl when given without a value")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.command == "probe":
         root = Path(args.path).resolve()
         manifest = load_manifest(root)
@@ -202,7 +210,10 @@ def _run_benchmark(args) -> int:
         from .eval.pr_agent import PRAgentReviewAdapter
 
         reviewer_adapter = PRAgentReviewAdapter(
-            command=shlex.split(args.pr_agent_command) if args.pr_agent_command else None,
+            # POSIX tokenization corrupts Windows executable paths by treating
+            # backslashes as escapes. Keep this in sync with the environment
+            # parser used by PRAgentReviewAdapter.
+            command=shlex.split(args.pr_agent_command, posix=os.name != "nt") if args.pr_agent_command else None,
             enabled=True,
             required_credential=args.pr_agent_required_credential,
             policy=pr_agent_policy,
