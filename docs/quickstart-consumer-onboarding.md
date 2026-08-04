@@ -115,8 +115,17 @@ python -m repo_dev_runtime.cli run . \
 
 The consumer checkout itself is never modified directly — only the
 disposable worktree is, and it is discarded (or kept as a branch)
-depending on the outcome. To resume an interrupted or already-completed
-run:
+depending on the outcome.
+
+This one-adapter setup has no second provider to perform an independent
+final review, so expect `status: "ready_for_human_review"` alongside a
+`self_reviewed_warning` event in the run's `events.jsonl` — this is the
+expected outcome for a single-provider setup, not a failure. A
+multi-provider setup (`--enable-omniroute` alongside `--enable-ollama`,
+or `--enable-pr-agent`) gets a genuinely independent reviewer instead;
+see `docs/aider-adapter.md` for the exact gating rules.
+
+To resume an interrupted or already-completed run:
 
 ```bash
 python -m repo_dev_runtime.cli run . \

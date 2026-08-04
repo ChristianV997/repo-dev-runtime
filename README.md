@@ -56,14 +56,15 @@ test, promotion, Git, or publishing authority.
 
 For external scheduling, invoke the normal `run` command with
 `--scheduler-state-file /safe/path/state.json --schedule-key nightly-review`.
-The runtime records atomic state and skips an already completed key by
-default. An OS scheduler supplies the cadence; this runtime deliberately
-does not run a daemon or make recurring, unbounded decisions itself.
-`repo_dev_runtime/scheduler.py`'s `TaskStateStore` is a standalone,
-independently tested one-shot task-state library available for callers who
-want it directly; the live workflow below does not use it, since its own
-resume mechanism (checksum-covered role/promotion artifacts) is already
-self-sufficient.
+The runtime records atomic state via `repo_dev_runtime/scheduler.py`'s
+`TaskStateStore.claim()` and skips an already completed key by default;
+add `--rerun-completed` to force a completed key to run again. An OS
+scheduler supplies the cadence; this runtime deliberately does not run a
+daemon or make recurring, unbounded decisions itself. This is separate
+from the workflow's own resume mechanism (`--resume --run-id <id>`,
+checksum-covered role/promotion artifacts), which tracks one run's
+internal progress rather than whether an externally-scheduled key has
+already been handled.
 
 ## Live workflow
 
@@ -86,6 +87,18 @@ require `--approve-paid` and explicit
 policy enablement. `--create-pr` additionally requires the consumer manifest to
 allow PR creation and only publishes a generated `repo-dev/*` branch; merging
 is never automated.
+
+`--apply-edits` runs also require an independent final review before
+promotion or `--create-pr`: the workflow excludes the implementer from the
+reviewer role whenever a second, authorized provider is actually available.
+A single-provider setup has no second party to defer to, so it proceeds
+with a recorded `self_reviewed_warning` event rather than deadlocking.
+
+`--enable-aider` routes the implementer role to a sandboxed Aider adapter
+instead of the general-purpose provider; it requires a distinct core
+provider (`--enable-ollama`/`--enable-omniroute`) for the other roles and
+an independent reviewer (`--enable-omniroute` or `--enable-pr-agent`),
+enforced before the run starts. See `docs/aider-adapter.md`.
 
 ## Evaluating external coding-agent providers
 
@@ -112,11 +125,12 @@ The fixture harness supplies bounded repository context and requires an exact
 `RepoDev.EditProposal.v1` response. A proposal is counted as completed only
 after its fixture's behavioral check passes.
 
-`AiderRuntime` is available only through the same explicit provider-module
-hook. It runs Aider in a temporary copy and translates its sandbox diff back
-to an `EditProposal`; it is not registered for ordinary `run` routing. See
-`docs/aider-adapter.md` for the required isolated installation and benchmark
-command.
+`AiderRuntime` can also be benchmarked here through the same explicit
+provider-module hook, in addition to its ordinary `run --enable-aider`
+path described above. It runs Aider in a temporary copy and translates
+its sandbox diff back to an `EditProposal`. See `docs/aider-adapter.md`
+for the required isolated installation, the `run --enable-aider` gating
+rules, and the benchmark command.
 
 Any provider implementing the `DevelopmentRuntime` protocol can be scored
 through `--provider-module` without changing this package; see

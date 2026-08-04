@@ -60,6 +60,15 @@ configuration is not suitable for default automation or broad campaign use.
 For an ordinary governed `run --live --apply-edits`, `--enable-aider` also
 requires both a general core provider (`--enable-ollama` or
 `--enable-omniroute`) for planner/tester/integrator roles and an independent
-reviewer (`--enable-omniroute` or `--enable-pr-agent`). The workflow excludes
-the implementer from final review and blocks promotion if no independent
-verdict is available.
+reviewer (`--enable-omniroute` or `--enable-pr-agent`) — this pairing is
+enforced by `cli.py`'s own gate before the workflow ever runs, so with
+`--enable-aider` there is always a distinct provider available for final
+review. The workflow's own independent-review requirement is conditional
+on that: it blocks promotion only when a second, authorized provider
+*was* structurally available and the review result still reports the
+implementer's own provider (a misconfigured or misreporting adapter). A
+setup with only one provider overall — not the case here, since
+`--enable-aider` requires a second one — proceeds to
+`ready_for_human_review` with a recorded `self_reviewed_warning` event
+instead of blocking forever, since there would be no second party to
+defer to and no security benefit to a permanent deadlock.

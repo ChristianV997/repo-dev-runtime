@@ -236,7 +236,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 # failure must be visible but cannot change a completed run's
                 # promotion state or mutate its checksum-validated envelope.
                 handoff = {"status": "failed", "error_type": type(exc).__name__, "detail": str(exc)[:500]}
-        print(json.dumps({"run_id": result.run_id, "status": result.status, "artifact_dir": result.artifact_dir, "handoff": handoff, "results": [item.to_dict() for item in result.results]}, indent=2))
+        print(json.dumps({"run_id": result.run_id, "status": result.status, "self_reviewed": result.self_reviewed, "artifact_dir": result.artifact_dir, "handoff": handoff, "results": [item.to_dict() for item in result.results]}, indent=2))
         return 0 if result.status in {"ready_for_human_review", "pr_created"} else 1
     if args.command == "benchmark":
         return _run_benchmark(args)

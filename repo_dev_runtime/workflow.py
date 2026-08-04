@@ -157,6 +157,7 @@ class WorkflowResult:
     status: str
     results: tuple[DevResult, ...]
     artifact_dir: str
+    self_reviewed: bool = False
 
 
 class DevelopmentWorkflow:
@@ -395,12 +396,16 @@ class DevelopmentWorkflow:
             # All 5 roles replayed from cache above (nothing new executed,
             # no worktree touched); return the already-recorded outcome
             # rather than re-running quality checks or the create_pr block.
-            return WorkflowResult(run_id, "ready_for_human_review", tuple(results), str(run_dir))
+            return WorkflowResult(run_id, "ready_for_human_review", tuple(results), str(run_dir), self_reviewed=cached_promotion.get("self_reviewed", False))
         quality = run_quality_checks(self.manifest, cwd=worktree_path, dry_run=dry_run, policy=self.policy)
         implementer_provider = next(
             (item.runtime for item in reversed(results) if item.changed_files),
             "",
         )
+        # Defined here, not only inside the final-review block below, so it
+        # has a defined value (False) for any run shape that never reaches
+        # that block (apply_edits=False, or quality failing first).
+        self_reviewed = False
         for attempt in range(max_fix_attempts):
             if quality["status"] == "passed":
                 break
@@ -502,9 +507,9 @@ class DevelopmentWorkflow:
         if worktree is not None:
             cleaned = WorktreeManager(self.manifest.root).remove(worktree, delete_branch=True)
             envelope.event("worktree_disposed", branch=worktree.branch, branch_deleted=cleaned)
-        _write_artifact(envelope, "promotion.json", {"status": "pr_created" if pr else "ready_for_human_review", "merge": False, "pr_creation": bool(pr), "pull_request": pr})
+        _write_artifact(envelope, "promotion.json", {"status": "pr_created" if pr else "ready_for_human_review", "merge": False, "pr_creation": bool(pr), "pull_request": pr, "self_reviewed": self_reviewed})
         envelope.finalize({"schema": "RepoDev.WorkflowRun.v1", "run_id": run_id, "status": "ready_for_human_review", "repository": self.manifest.name, "roles": list(ROLES)})
-        return WorkflowResult(run_id, "ready_for_human_review", tuple(results), str(run_dir))
+        return WorkflowResult(run_id, "ready_for_human_review", tuple(results), str(run_dir), self_reviewed=self_reviewed)
 
 
 def _network_access_allowed(manifest: RepoManifest, policy: RuntimePolicy | None) -> bool:
