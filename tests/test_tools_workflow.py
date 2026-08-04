@@ -67,6 +67,19 @@ class MalformedThenRepairRuntime(ProposalRuntime):
         return super().execute(task)
 
 
+class RaisingRepairRuntime(ProposalRuntime):
+    def __init__(self):
+        self.implementer_calls = 0
+
+    def execute(self, task):
+        if task.role == "implementer":
+            self.implementer_calls += 1
+            if self.implementer_calls == 1:
+                return DevResult(task.task_id, "fake", "succeeded", output="not proposal json")
+            raise RuntimeError("api_key=repair-provider-secret")
+        return super().execute(task)
+
+
 class InterruptedProposalRuntime(ProposalRuntime):
     def __init__(self):
         self.tester_calls = 0
@@ -325,6 +338,29 @@ def test_malformed_proposal_uses_bounded_repair(tmp_path):
     assert "proposal_rejected" in events and "proposal_repaired" in events
     assert (tmp_path / "src" / "app.py").read_text() == "value = 1\n"
     assert json.loads((tmp_path / "runs" / result.run_id / "applied_patch.json").read_text())["changed_files"] == ["src/app.py"]
+
+
+def test_repair_provider_exception_is_contained_and_redacted(tmp_path):
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "initial"], check=True)
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=("src",), test_command=("git", "status", "--short"))
+
+    result = DevelopmentWorkflow(
+        manifest=manifest,
+        policy=RuntimePolicy(),
+        runtime=RaisingRepairRuntime(),
+        artifacts_root=tmp_path / "runs",
+    ).run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True, max_fix_attempts=1)
+
+    assert result.status == "blocked"
+    assert all("repair-provider-secret" not in item.error_message for item in result.results)
+    promotion = json.loads((tmp_path / "runs" / result.run_id / "promotion.json").read_text(encoding="utf-8"))
+    assert "repair-provider-secret" not in json.dumps(promotion)
 
 
 def test_create_pr_workflow_calls_publisher_with_correct_signature(tmp_path, monkeypatch):
