@@ -11,7 +11,7 @@ or bypassing them.
 
 | Provider | Decision | Why |
 |---|---|---|
-| Aider | Reference only | Inspired the static repository map; no Aider code adapted into the eval layer (owned separately). |
+| Aider | Bounded benchmark adapter, disabled by default | `runtimes/aider.py` executes an operator-installed Aider only in a temporary copied sandbox, then returns a standard validated proposal. It is not in default routing. |
 | PR-Agent | Bounded adapter, disabled by default | Reviewer-only bridge (`eval/pr_agent.py`); a real translation wrapper (`scripts/pr_agent_bridge.py`, operator-installed via `pip install pr-agent GitPython`) drives the actual `pr-agent` package's `LocalGitProvider` review flow — see `docs/pr-agent-real-integration.md`. |
 | RepoAgent | Optional interface, not adopted | `ContextProvider` protocol defined; the dependency-free static map stays the default. |
 | Tree-sitter | Optional interface, not adopted | Same `ContextProvider` protocol; no grammars/bindings vendored. |

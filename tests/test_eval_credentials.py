@@ -37,6 +37,22 @@ def test_build_subprocess_env_with_no_prefixes_is_credential_free():
     assert env == {"PATH": "/usr/bin"}
 
 
+def test_build_subprocess_env_preserves_only_explicit_windows_launch_variables():
+    source = {
+        "PATH": "C:\\Windows",
+        "SYSTEMROOT": "C:\\Windows",
+        "COMSPEC": "C:\\Windows\\System32\\cmd.exe",
+        "APPDATA": "C:\\Users\\user\\AppData",
+        "OPENAI_API_KEY": "must-not-leak",
+    }
+    env = build_subprocess_env(CredentialAllowlist(provider="aider"), source=source)
+
+    assert env["SYSTEMROOT"] == "C:\\Windows"
+    assert env["COMSPEC"].endswith("cmd.exe")
+    assert "APPDATA" not in env
+    assert "OPENAI_API_KEY" not in env
+
+
 def test_credential_allowlist_requires_provider_name():
     try:
         CredentialAllowlist(provider="")

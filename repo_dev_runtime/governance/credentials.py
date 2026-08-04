@@ -17,7 +17,13 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 # Env vars always safe to forward: none of these can carry a secret.
-_BASE_SAFE_NAMES = ("PATH", "HOME", "USERPROFILE", "TEMP", "TMP")
+# Standard process-launch variables only. These are non-secret OS plumbing;
+# Windows Python needs SYSTEMROOT to initialize asyncio in a sanitized child
+# environment. Provider credentials still require an explicit prefix.
+_BASE_SAFE_NAMES = (
+    "PATH", "HOME", "USERPROFILE", "TEMP", "TMP",
+    "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT",
+)
 
 # JSON "SomeKeyName": "value" where the key name looks credential-shaped —
 # redacts the VALUE (the actual secret), keeping the key name so a reader

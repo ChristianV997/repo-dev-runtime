@@ -169,7 +169,10 @@ def _implementer_task(
         base_ref="HEAD",
         role="implementer",
         prompt=prompt,
-        allowed_paths=case.allowed_paths,
+        # External providers that directly edit a nested sandbox require an
+        # explicit scope. Fixtures with unrestricted patch semantics use the
+        # canonical root scope rather than an empty tuple.
+        allowed_paths=allowed_paths,
         dry_run=False,
         timeout_s=timeout_s,
     )
