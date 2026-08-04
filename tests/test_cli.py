@@ -141,6 +141,37 @@ def test_scheduled_run_records_success_and_skips_completed_key(tmp_path, capsys)
     assert payload == {"status": "skipped", "reason": "scheduled_task_already_completed", "schedule_key": "nightly"}
 
 
+def test_scheduled_run_uses_the_atomic_claim_not_a_separate_load_and_update(tmp_path, capsys, monkeypatch):
+    """Regression test: the scheduler wiring used to call
+    state_store.load() and state_store.update(..., "running") as two
+    separate lock acquisitions - a TOCTOU window where two concurrent
+    invocations sharing --schedule-key could both observe the task as
+    unclaimed and both proceed. It must go through the single atomic
+    claim() call instead."""
+    from repo_dev_runtime.scheduler import TaskStateStore
+
+    calls = []
+    real_claim = TaskStateStore.claim
+
+    def spying_claim(self, *args, **kwargs):
+        calls.append((args, kwargs))
+        return real_claim(self, *args, **kwargs)
+
+    monkeypatch.setattr(TaskStateStore, "load", lambda self: (_ for _ in ()).throw(AssertionError("load() must not be called directly; use claim()")))
+    monkeypatch.setattr(TaskStateStore, "claim", spying_claim)
+
+    state_path = tmp_path / "state.json"
+    code, payload = _run_cli([
+        "run", str(tmp_path), "--prompt", "inspect", "--scheduler-state-file", str(state_path),
+        "--schedule-key", "nightly", "--artifacts-root", str(tmp_path / "artifacts"),
+    ], capsys)
+
+    assert code == 0
+    assert payload["status"] == "ready_for_human_review"
+    assert len(calls) == 1
+    assert calls[0][0][:2] == ("nightly", "running")
+
+
 def test_cli_enable_openclaw_flag_is_wired_into_default_registry(tmp_path, monkeypatch):
     """Regression test: cli.py had no --enable-openclaw flag at all, so
     default_registry() was always called with openclaw_enabled unset

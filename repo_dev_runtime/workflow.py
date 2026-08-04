@@ -183,6 +183,29 @@ class DevelopmentWorkflow:
         self.context_provider = context_provider or StaticMapContextProvider()
         self.artifacts_root = Path(artifacts_root or Path(manifest.root) / ".dev-runtime" / "runs")
 
+    def _independent_reviewer_available(self) -> bool:
+        """Whether a genuinely different reviewer could plausibly be picked.
+
+        The final-review gate below excludes the implementer's provider
+        from the reviewer role and hard-fails if the reviewer result still
+        reports that same provider. But excluding a provider only produces
+        a different result when a second one actually exists: a single
+        runtime object (the primary --live --apply-edits path - one
+        adapter, no router, no distinct reviewer_runtime) reports the same
+        fixed self.name for every role regardless of exclusion, so the
+        gate would raise "implementer cannot review its own patch" on
+        every run and the workflow could never promote or create a PR.
+        True when a distinct reviewer_runtime was explicitly configured
+        (e.g. a PR-Agent bridge - always independent by construction), or
+        when self.runtime is a RuntimeRouter with >=2 authorized, reachable
+        candidates for the reviewer role.
+        """
+        if self.reviewer_runtime is not self.runtime:
+            return True
+        if isinstance(self.runtime, RuntimeRouter):
+            return len(self.runtime.available_providers_for_role("reviewer")) >= 2
+        return False
+
     def _build_context(self, root: str, *, objective: str) -> tuple[str, str, str]:
         """Build bounded context through the configured provider or fallback.
 
@@ -416,23 +439,33 @@ class DevelopmentWorkflow:
             review_prompt = f"Role: reviewer\nReturn only RepoDev.ReviewVerdict.v1 JSON with approved, summary, and findings. Independently review the final worktree diff and passed quality evidence. Approval is permitted only when the patch is safe and the evidence is adequate.\n\nObjective:\n{prompt}\n\nQuality:\n{json.dumps(quality, sort_keys=True)[:8000]}\n\nFinal diff:\n{final_diff[:24000]}"
             task = DevTask(task_id=review_task_id, repository=worktree_path, base_ref=base_ref, role="reviewer", prompt=review_prompt, acceptance=("return a structured final review",), allowed_paths=self.manifest.allowed_paths, dry_run=False)
             task.validate()
+            independent_reviewer_available = implementer_provider and self._independent_reviewer_available()
             result = _execute_runtime(
                 self.reviewer_runtime,
                 task,
                 approved=approved,
-                excluded_providers=(implementer_provider,) if implementer_provider else (),
+                excluded_providers=(implementer_provider,) if independent_reviewer_available else (),
             )
             try:
                 if result.status != "succeeded":
                     raise ReviewValidationError("independent reviewer did not produce a successful verdict")
                 if not implementer_provider:
                     raise ReviewValidationError("no applied implementer provider was recorded")
-                if result.runtime == implementer_provider:
+                self_reviewed = result.runtime == implementer_provider
+                if self_reviewed and independent_reviewer_available:
                     raise ReviewValidationError("implementer cannot review its own patch")
                 verdict = parse_review_verdict(result.output)
                 _write_artifact(envelope, "review_verdict.json", verdict.to_dict())
                 _write_artifact(envelope, "final_review_verdict.json", verdict.to_dict())
-                envelope.event("final_review_recorded", task_id=task.task_id, approved=verdict.approved, findings=len(verdict.findings))
+                envelope.event("final_review_recorded", task_id=task.task_id, approved=verdict.approved, findings=len(verdict.findings), self_reviewed=self_reviewed)
+                if self_reviewed:
+                    # No independent reviewer was structurally available
+                    # (single-provider setup). Blocking here permanently
+                    # would deadlock every such run with no security
+                    # benefit - quality checks already ran, and there is no
+                    # second party to defer to. Record it for a human to
+                    # see instead of silently treating it as independent.
+                    envelope.event("self_reviewed_warning", task_id=task.task_id, runtime=result.runtime)
                 if not verdict.approved:
                     quality = {"status": "failed", "checks": quality.get("checks", {}), "reason": "final_review_not_approved"}
                     result = DevResult(result.task_id, result.runtime, "blocked", result.output, error_type="review_not_approved", error_message=verdict.summary)

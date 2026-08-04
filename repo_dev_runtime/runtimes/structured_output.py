@@ -67,11 +67,21 @@ def ollama_format(role: str) -> dict[str, Any] | None:
 
 
 def openai_response_format(role: str) -> dict[str, Any] | None:
-    """OpenAI-compatible JSON-schema response format for contract roles."""
+    """OpenAI-compatible JSON-schema response format for contract roles.
+
+    ``strict`` mode is deliberately off. OpenAI's strict subset forbids
+    keywords these schemas use (``minLength``, ``minItems``) and requires
+    every ``properties`` key to appear in ``required`` (``_EDIT`` only
+    requires ``path``/``format`` of six) - a strict request against these
+    exact schemas is rejected by the API before a model ever runs. Turning
+    strict off costs no real enforcement: ``parse_edit_proposal``/
+    ``parse_review_verdict`` independently validate every field regardless
+    of what the provider returns.
+    """
     schema = schema_for_role(role)
     if schema is None:
         return None
     return {
         "type": "json_schema",
-        "json_schema": {"name": f"repo_dev_{role}", "strict": True, "schema": schema},
+        "json_schema": {"name": f"repo_dev_{role}", "strict": False, "schema": schema},
     }

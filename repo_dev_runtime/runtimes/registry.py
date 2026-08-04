@@ -119,6 +119,18 @@ class RuntimeRouter:
         self._available_cache_at = now
         return available
 
+    def available_providers_for_role(self, role: str) -> tuple[str, ...]:
+        """Authorized, reachable candidates for ``role``, ignoring any
+        per-call exclusion or paid-routing approval.
+
+        A pure availability query, not a routing decision: used to answer
+        "could an independent second provider plausibly be selected here at
+        all" before attempting a real, approval-gated route() that might
+        need to exclude one of these candidates.
+        """
+        available = set(self._available())
+        return tuple(candidate for candidate in self.routing.preferred_by_role.get(role, ("ollama",)) if candidate in available)
+
     def route(
         self,
         task: DevTask,

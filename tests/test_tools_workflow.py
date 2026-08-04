@@ -471,7 +471,21 @@ def test_live_edit_requires_independent_post_quality_reviewer(tmp_path):
     assert (artifact_dir / "reviewer.json").exists()
 
 
-def test_live_edit_blocks_self_review_before_promotion(tmp_path):
+def test_live_edit_self_review_is_recorded_as_a_warning_when_no_independent_reviewer_is_available(tmp_path):
+    """Regression test: enforcing "implementer cannot review its own
+    patch" unconditionally deadlocked every single-provider --apply-edits
+    run, including the primary documented path (--live --enable-ollama
+    --apply-edits) - one runtime object, no router, no distinct
+    reviewer_runtime. A real single adapter reports the same fixed
+    self.name for every role, so excluding it could never produce a
+    different provider, and the gate always raised. This is exactly that
+    shape: SameProviderReviewRuntime reports "same_provider" for both
+    implementer and reviewer, from a single non-router runtime object.
+    Independent review is now only enforced when a second, authorized
+    provider was structurally available; otherwise the run proceeds and a
+    self_reviewed_warning event records the fact for a human to see,
+    instead of blocking the run forever with no security benefit (quality
+    checks already ran; there is no second party to defer to)."""
     subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
@@ -485,6 +499,40 @@ def test_live_edit_blocks_self_review_before_promotion(tmp_path):
         manifest=manifest,
         policy=RuntimePolicy(),
         runtime=SameProviderReviewRuntime(),
+        artifacts_root=tmp_path / "runs",
+    ).run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True)
+
+    assert result.status == "ready_for_human_review"
+    events = (tmp_path / "runs" / result.run_id / "events.jsonl").read_text(encoding="utf-8")
+    assert "self_reviewed_warning" in events
+
+
+def test_live_edit_still_blocks_self_review_when_independence_was_available(tmp_path):
+    """Companion to the warning-not-block test above: when a genuinely
+    distinct reviewer_runtime IS configured (independent review was
+    structurally possible), the hard block must still fire if that
+    reviewer's result nonetheless reports the implementer's own provider
+    name - e.g. a misconfigured or misreporting adapter."""
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "initial"], check=True)
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=("src",), test_command=("git", "status", "--short"))
+
+    class SpoofedIdentityReviewerRuntime:
+        name = "reviewer_provider"
+
+        def execute(self, task):
+            return DevResult(task.task_id, "implementer_provider", "succeeded", output='{"schema":"RepoDev.ReviewVerdict.v1","approved":true,"summary":"safe","findings":[]}')
+
+    result = DevelopmentWorkflow(
+        manifest=manifest,
+        policy=RuntimePolicy(),
+        runtime=ProposalRuntime(),
+        reviewer_runtime=SpoofedIdentityReviewerRuntime(),
         artifacts_root=tmp_path / "runs",
     ).run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True)
 

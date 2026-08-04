@@ -140,7 +140,12 @@ def test_openai_compatible_sends_exact_schema_for_contract_roles():
         OpenAICompatibleRuntime(base_url=server.base_url, enabled=True).execute(_task(role="implementer"))
     response_format = json.loads(captured["body"].decode())["response_format"]
     assert response_format["type"] == "json_schema"
-    assert response_format["json_schema"]["strict"] is True
+    # strict=False: the strict subset forbids minLength/minItems and
+    # requires every properties key in required, which these schemas
+    # violate - a strict request would be rejected by a real OpenAI-
+    # compatible endpoint before a model ever ran. parse_edit_proposal
+    # validates every field independently regardless of this setting.
+    assert response_format["json_schema"]["strict"] is False
     assert response_format["json_schema"]["schema"]["properties"]["schema"]["const"] == "RepoDev.EditProposal.v1"
 
 

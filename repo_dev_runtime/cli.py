@@ -145,7 +145,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1
         if args.enable_pr_agent:
             try:
-                policy.authorize("pr_agent_review", approved=True)
+                # The real gate is args.approve_external_review, checked
+                # just above. Hard-coding approved=True here would make
+                # this authorize() call tautological (satisfied by
+                # construction, since allow_external_provider_benchmark
+                # was itself set from args.enable_pr_agent above) - it
+                # must thread the actual per-run approval to add any
+                # defense-in-depth.
+                policy.authorize("pr_agent_review", approved=args.approve_external_review)
             except PermissionError as exc:
                 print(json.dumps({"status": "blocked", "reason": str(exc)}, indent=2))
                 return 1
@@ -161,11 +168,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         state_store = None
         if args.scheduler_state_file:
             state_store = TaskStateStore(args.scheduler_state_file)
-            prior = state_store.load().get(args.schedule_key)
-            if prior and prior.get("status") == "succeeded" and not args.rerun_completed:
+            # claim() performs the read and the conditional write inside a
+            # single lock acquisition. load() followed by a separate
+            # update() is two acquisitions, so two concurrent invocations
+            # sharing --schedule-key could both observe the task as
+            # unclaimed and both proceed to a full run.
+            guarded_statuses = () if args.rerun_completed else ("succeeded",)
+            claimed = state_store.claim(args.schedule_key, "running", unless_status=guarded_statuses, repository=manifest.name, prompt=args.prompt, run_id=args.run_id or "")
+            if claimed is None:
                 print(json.dumps({"status": "skipped", "reason": "scheduled_task_already_completed", "schedule_key": args.schedule_key}, indent=2))
                 return 0
-            state_store.update(args.schedule_key, "running", repository=manifest.name, prompt=args.prompt, run_id=args.run_id or "")
         artifacts_root = Path(args.artifacts_root).expanduser() if args.artifacts_root else Path.home() / ".repo-dev-runtime" / "runs" / manifest.name
         runtime = RuntimeRouter(default_registry(ollama_enabled=args.enable_ollama if args.live else None, aider_enabled=args.enable_aider if args.live else None, omniroute_enabled=args.enable_omniroute if args.live else None, hermes_enabled=args.enable_sidecars if args.live else None, deerflow_enabled=args.enable_sidecars if args.live else None, openclaw_enabled=args.enable_openclaw if args.live else None), policy=policy) if args.live else DryRunRuntime()
         reviewer_runtime = None
