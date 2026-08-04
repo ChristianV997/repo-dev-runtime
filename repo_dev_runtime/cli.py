@@ -26,6 +26,7 @@ from .eval.harness import aggregate_scorecard, run_fixture_benchmark
 from .eval.loader import ProviderLoadError, load_provider
 from .eval.provider_specs import default_provider_specs
 from .eval.report import append_history, render_json_report, render_markdown_report
+from .governance.provider_admission import evaluate_limited_pilot_admission
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -384,8 +385,9 @@ def _run_benchmark(args) -> int:
         if args.enable_mini_swe_agent:
             provider_specs.append(specs["mini_swe_agent"])
 
-    json_report = render_json_report(scorecards=[scorecard], fixture_results=results, provider_specs=provider_specs)
-    markdown_report = render_markdown_report(scorecards=[scorecard], fixture_results=results, provider_specs=provider_specs)
+    admission = evaluate_limited_pilot_admission(scorecard, results)
+    json_report = render_json_report(scorecards=[scorecard], fixture_results=results, provider_specs=provider_specs, admission_decisions=[admission])
+    markdown_report = render_markdown_report(scorecards=[scorecard], fixture_results=results, provider_specs=provider_specs, admission_decisions=[admission])
 
     if args.json_out:
         Path(args.json_out).write_text(json.dumps(json_report, indent=2), encoding="utf-8")
