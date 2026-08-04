@@ -176,6 +176,53 @@ def test_test_failure_requires_one_repair_iteration(tmp_path):
     assert result.test_result["status"] == "passed"
 
 
+def test_repair_prompt_includes_redacted_bounded_test_diagnostics(tmp_path):
+    from repo_dev_runtime.contracts.models import DevResult, RuntimeHealth
+
+    case = next(c for c in FIXTURE_CASES if c.fixture_id == "multi_file_change")
+    prompts = []
+
+    class RepairingProvider:
+        name = "repairing_provider"
+
+        def __init__(self):
+            self.calls = 0
+
+        def health(self):
+            return RuntimeHealth(self.name, True, True)
+
+        def execute(self, task):
+            self.calls += 1
+            prompts.append(task.prompt)
+            head = re.search(r"base_commit=([0-9a-f]+)", task.prompt).group(1)
+            context = re.search(r"context_hash=([0-9a-f]+)", task.prompt).group(1)
+            if self.calls == 1:
+                edits = [
+                    {"path": "greeter.py", "format": "whole_file", "content": "from message import compose_greeting\n\n\ndef greet(name):\n    return compose_greeting(name)\n"},
+                    {"path": "message.py", "format": "whole_file", "content": "from greeter import greet\n\n\ndef compose_greeting(name):\n    return 'Hello ' + name\n"},
+                ]
+            else:
+                edits = [{"path": "message.py", "format": "search_replace", "search": "from greeter import greet\n\n", "replace": ""}]
+            return DevResult(task.task_id, self.name, "succeeded", output=json.dumps({
+                "schema": "RepoDev.EditProposal.v1", "proposal_id": f"repair-{self.calls}", "task_id": task.task_id,
+                "base_commit": head, "context_hash": context, "summary": "repair", "edits": edits,
+            }))
+
+    result = run_fixture_case(
+        case,
+        make_provider=lambda _case: RepairingProvider(),
+        provider_name="repairing_provider",
+        tmp_root=tmp_path,
+        max_fix_attempts=1,
+    )
+
+    assert result.outcome == "succeeded"
+    assert result.repair_succeeded is True
+    assert len(prompts) == 2
+    assert "ImportError" in prompts[1]
+    assert "untrusted diagnostic output" in prompts[1]
+
+
 def test_test_command_timeout_is_classified_distinctly(tmp_path, monkeypatch):
     from repo_dev_runtime.eval import harness
     from repo_dev_runtime.tools.runner import CommandResult
