@@ -77,6 +77,19 @@ def test_router_requires_paid_approval():
     assert router.route(task, approved=True) == "openai_compatible"
 
 
+def test_router_prefers_openai_compatible_over_ollama_when_both_available():
+    class OpenAIFake(FakeRuntime):
+        name = "openai_compatible"
+
+        def health(self):
+            return RuntimeHealth("openai_compatible", True, True, ("test",))
+
+    policy = RuntimePolicy(allow_ollama=True, allow_omniroute=True, allow_paid_routing=True)
+    router = RuntimeRouter(RuntimeRegistry({"openai_compatible": OpenAIFake(), "ollama": FakeRuntime()}), policy=policy)
+    task = DevTask(task_id="t", repository="r", base_ref="HEAD", role="planner", prompt="x")
+    assert router.route(task, approved=True) == "openai_compatible"
+
+
 def test_router_caches_health_probes_with_explicit_invalidation():
     class CountingRuntime(FakeRuntime):
         def __init__(self):

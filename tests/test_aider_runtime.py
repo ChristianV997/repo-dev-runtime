@@ -92,6 +92,29 @@ def test_aider_edits_only_sandbox_then_returns_a_valid_proposal(tmp_path):
     assert (root / "calc.py").read_text(encoding="utf-8") == "def add(a, b):\n    return a + b\n"
 
 
+def test_aider_forwards_openrouter_credentials_to_the_subprocess(tmp_path, monkeypatch):
+    """Aider natively supports OpenRouter-backed models via
+    OPENROUTER_API_KEY; the CredentialAllowlist must forward it into the
+    sandboxed subprocess like the existing OLLAMA_/OPENAI_/ANTHROPIC_
+    prefixes, or a user configuring Aider against OpenRouter would see it
+    silently fail to authenticate."""
+    root, head = _repository(tmp_path)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-secret")
+    script = _writer(
+        tmp_path,
+        "import os\nfrom pathlib import Path\n"
+        "Path('calc.py').write_text('KEY=' + os.environ.get('OPENROUTER_API_KEY', 'MISSING') + '\\n', encoding='utf-8')\n",
+    )
+    task = _task(root, head)
+    runtime = AiderRuntime(command=[sys.executable, str(script)], model="openrouter/test", enabled=True)
+
+    result = runtime.execute(task)
+
+    assert result.status == "succeeded"
+    proposal = parse_edit_proposal(result.output)
+    assert proposal.edits[0].content == "KEY=sk-or-test-secret\n"
+
+
 def test_aider_requires_a_bound_edit_contract_and_explicit_scope(tmp_path):
     root, head = _repository(tmp_path)
     task = _task(root, head, allowed_paths=())
