@@ -1,4 +1,3 @@
-import os
 import subprocess
 import json
 import re
@@ -13,11 +12,19 @@ from repo_dev_runtime.manifest import RepoManifest
 from repo_dev_runtime.tools.runner import run_command
 from repo_dev_runtime.workflow import DevelopmentWorkflow, run_quality_checks
 from repo_dev_runtime.contracts.models import DevResult
+from tests.support.processes import pid_is_running
 
 
 class FakeRuntime:
     def execute(self, task):
         return DevResult(task.task_id, "fake", "succeeded", output=task.role)
+
+
+class RaisingRuntime:
+    name = "raising_runtime"
+
+    def execute(self, task):
+        raise RuntimeError("api_key=workflow-provider-secret")
 
 
 class SecretEchoRuntime:
@@ -126,11 +133,24 @@ def test_runner_timeout_terminates_child_process_tree(tmp_path):
         time.sleep(0.02)
     assert child_pid_file.exists()
     child_pid = int(child_pid_file.read_text(encoding="utf-8"))
-    try:
-        os.kill(child_pid, 0)
-    except OSError:
-        return
-    raise AssertionError("timed-out command left a child process running")
+    assert not pid_is_running(child_pid), "timed-out command left a child process running"
+
+
+def test_workflow_contains_direct_provider_exception_and_persists_failure(tmp_path):
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=("src",))
+
+    result = DevelopmentWorkflow(
+        manifest=manifest,
+        policy=RuntimePolicy(),
+        runtime=RaisingRuntime(),
+        artifacts_root=tmp_path / "runs",
+    ).run(prompt="inspect")
+
+    assert result.status == "blocked"
+    assert result.results[0].error_type == "RuntimeError"
+    assert "workflow-provider-secret" not in result.results[0].error_message
+    promotion = json.loads((tmp_path / "runs" / result.run_id / "promotion.json").read_text(encoding="utf-8"))
+    assert promotion["reason"] == "planner_failed"
 
 
 def test_live_edit_resume_replays_checksum_validated_patches(tmp_path):

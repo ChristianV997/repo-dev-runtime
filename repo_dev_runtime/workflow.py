@@ -10,7 +10,7 @@ from typing import Any
 
 from .contracts.models import DevResult, DevTask
 from .governance.artifacts import RunEnvelope
-from .governance.credentials import redact_json
+from .governance.credentials import redact_json, redact_text
 from .governance.policy import RuntimePolicy
 from .manifest import RepoManifest
 from .tools.runner import run_command
@@ -81,6 +81,30 @@ def _verify_resume_request(run_id: str, run_dir: Path, expected_hash: str) -> No
         raise ValueError("run request artifact is invalid")
     if payload.get("request_hash") != expected_hash:
         raise ValueError("resume request does not match the original run")
+
+
+def _execute_runtime(runtime: object, task: DevTask, *, approved: bool) -> DevResult:
+    """Normalize provider exceptions at the workflow boundary."""
+    try:
+        if isinstance(runtime, RuntimeRouter):
+            result = runtime.execute(task, approved=approved)
+        else:
+            result = runtime.execute(task)  # type: ignore[attr-defined]
+        if not isinstance(result, DevResult):
+            raise TypeError("runtime execute() did not return DevResult")
+        result.validate()
+        return result
+    except Exception as exc:
+        runtime_name = getattr(runtime, "name", "runtime")
+        if not isinstance(runtime_name, str) or not runtime_name:
+            runtime_name = "runtime"
+        return DevResult(
+            task.task_id,
+            runtime_name,
+            "failed",
+            error_type=type(exc).__name__,
+            error_message=redact_text(str(exc)[:500]),
+        )
 
 
 def _replay_applied_proposals(envelope: RunEnvelope, *, worktree_path: str, manifest: RepoManifest) -> int:
@@ -236,11 +260,7 @@ class DevelopmentWorkflow:
             task.validate()
             envelope.event("task_started", task_id=task.task_id, role=role, task_hash=task.task_hash, parents=previous)
             _write_artifact(envelope, "checkpoint.json", {"run_id": run_id, "role": role, "status": "running", "task_id": task.task_id})
-            if isinstance(self.runtime, RuntimeRouter):
-                result = self.runtime.execute(task, approved=approved)
-            else:
-                result = self.runtime.execute(task)  # type: ignore[attr-defined]
-            result.validate()
+            result = _execute_runtime(self.runtime, task, approved=approved)
             if apply_edits and role == "implementer" and result.status == "succeeded":
                 try:
                     proposal = parse_edit_proposal(result.output)
@@ -313,7 +333,7 @@ class DevelopmentWorkflow:
             repair_prompt = f"Role: implementer\nReturn only RepoDev.EditProposal.v1 JSON. Repair these quality failures, using a minimal patch. task_id={repair_task_id}; base_commit={head}; context_hash={retry_hash}.\n\nQuality:\n{json.dumps(quality, sort_keys=True)[:8000]}\n\nContext:\n{retry_context}"
             task = DevTask(task_id=repair_task_id, repository=worktree_path, base_ref=base_ref, role="implementer", prompt=repair_prompt, acceptance=("return a structured repair proposal",), allowed_paths=self.manifest.allowed_paths, dry_run=False)
             task.validate()
-            result = self.runtime.execute(task, approved=approved) if isinstance(self.runtime, RuntimeRouter) else self.runtime.execute(task)  # type: ignore[attr-defined]
+            result = _execute_runtime(self.runtime, task, approved=approved)
             try:
                 proposal = parse_edit_proposal(result.output)
                 if proposal.task_id != task.task_id:
@@ -334,7 +354,7 @@ class DevelopmentWorkflow:
             review_prompt = f"Role: reviewer\nReturn only RepoDev.ReviewVerdict.v1 JSON with approved, summary, and findings. Review the final worktree diff after repair proposals and the passed quality result.\n\nObjective:\n{prompt}\n\nQuality:\n{json.dumps(quality, sort_keys=True)[:8000]}"
             task = DevTask(task_id=review_task_id, repository=worktree_path, base_ref=base_ref, role="reviewer", prompt=review_prompt, acceptance=("return a structured final review",), allowed_paths=self.manifest.allowed_paths, dry_run=False)
             task.validate()
-            result = self.runtime.execute(task, approved=approved) if isinstance(self.runtime, RuntimeRouter) else self.runtime.execute(task)  # type: ignore[attr-defined]
+            result = _execute_runtime(self.runtime, task, approved=approved)
             try:
                 verdict = parse_review_verdict(result.output)
                 _write_artifact(envelope, "final_review_verdict.json", verdict.to_dict())
