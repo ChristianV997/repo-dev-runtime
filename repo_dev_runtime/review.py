@@ -21,6 +21,10 @@ class ReviewFinding:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> "ReviewFinding":
+        # A non-mapping finding (e.g. findings: [123]) would make set(raw)
+        # raise TypeError, escaping the ReviewValidationError contract.
+        if not isinstance(raw, Mapping):
+            raise ReviewValidationError("review finding must be an object")
         if set(raw) - {"severity", "path", "message"}:
             raise ReviewValidationError("invalid finding fields")
         item = cls(str(raw.get("severity", "")), str(raw.get("path", "")), str(raw.get("message", "")))
@@ -53,7 +57,10 @@ class ReviewVerdict:
 
 def parse_review_verdict(output: str) -> ReviewVerdict:
     text = output.strip()
-    if text.startswith("```") and text.endswith("```"):
+    # See parse_edit_proposal: a bare "```" satisfies both startswith and
+    # endswith, and splitting it would raise IndexError instead of this
+    # parser's declared ReviewValidationError.
+    if text.startswith("```") and text.endswith("```") and "\n" in text:
         text = text.split("\n", 1)[1].rsplit("\n", 1)[0]
     try:
         return ReviewVerdict.from_dict(json.loads(text))

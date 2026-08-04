@@ -292,3 +292,27 @@ def test_pr_agent_review_requires_explicit_approval():
 def test_unknown_capability_is_denied_fail_closed():
     with pytest.raises(PermissionError, match="unsupported capability"):
         RuntimePolicy().authorize("future_unreviewed_capability")
+
+
+def test_redact_json_scrubs_non_string_values_under_credential_keys():
+    """Regression test: the [REDACTED] substitution required
+    isinstance(item, str), so a *recognized* credential key whose value was
+    a dict or list fell through to ordinary recursion — and redact_text
+    matches nothing on a bare unlabeled secret. Secrets therefore reached
+    every artifact written through _write_artifact/RunEnvelope.event."""
+    from repo_dev_runtime.governance.credentials import redact_json
+
+    assert "sk-SECRET" not in str(redact_json({"api_key": {"value": "sk-SECRET123"}}))
+    assert "sk-SECRET" not in str(redact_json({"tokens": ["sk-SECRET123"]}))
+    assert "sk-SECRET" not in str(redact_json({"credentials": {"a": {"b": ["sk-SECRET123"]}}}))
+    # Structure is preserved so artifacts stay schema-shaped and readable.
+    assert redact_json({"api_key": {"value": "sk-SECRET123"}}) == {"api_key": {"value": "[REDACTED]"}}
+    # Non-credential keys are untouched; None/bool are not stringified.
+    assert redact_json({"author": "someone", "api_key": None}) == {"author": "someone", "api_key": None}
+
+
+def test_command_policy_denies_unparseable_commands_instead_of_raising():
+    """A fail-closed decision API must deny input it cannot parse, not raise
+    out of evaluate_command and leave callers an exception they don't expect."""
+    decision = evaluate_command('echo "unbalanced')
+    assert decision.allowed is False

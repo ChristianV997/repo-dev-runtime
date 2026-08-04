@@ -59,16 +59,26 @@ class GitHubPublisher:
     @staticmethod
     def _changed_paths(worktree: str | Path) -> list[str]:
         import subprocess
-        result = subprocess.run(["git", "-C", str(Path(worktree).resolve()), "status", "--porcelain", "--untracked-files=all"], capture_output=True, text=True, timeout=20, check=False)
+        # -z gives NUL-separated and, critically, *unquoted* paths. Without
+        # it git quotes any path containing a space or non-ASCII byte
+        # ("my file.txt" -> '"my file.txt"'; naive.txt -> '"na\303\257ve.txt"'),
+        # and those literal quotes/octal escapes were then policy-checked and
+        # handed to `git add --`, which fails on a path that does not exist.
+        result = subprocess.run(["git", "-C", str(Path(worktree).resolve()), "status", "--porcelain", "-z", "--untracked-files=all"], capture_output=True, text=True, timeout=20, check=False)
         if result.returncode != 0:
             raise RuntimeError("unable to inspect worktree")
         paths: list[str] = []
-        for line in result.stdout.splitlines():
-            if len(line) < 4:
+        # With -z a rename/copy is two records: "R  <new>" then "<old>".
+        records = [record for record in result.stdout.split("\0") if record]
+        index = 0
+        while index < len(records):
+            record = records[index]
+            index += 1
+            if len(record) < 4:
                 continue
-            raw = line[3:]
-            if " -> " in raw:
-                raw = raw.split(" -> ", 1)[1]
+            status, raw = record[:2], record[3:]
+            if "R" in status or "C" in status:
+                index += 1  # consume the paired old path; keep the new one
             paths.append(raw.replace("\\", "/"))
         return paths
 
