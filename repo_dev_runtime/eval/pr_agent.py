@@ -13,13 +13,13 @@ import json
 import os
 import shlex
 import shutil
-import subprocess
 from typing import Sequence
 
 from ..contracts.models import RuntimeHealth
 from ..governance.credentials import CredentialAllowlist, build_subprocess_env, missing_credential_result, redact_text
 from ..governance.policy import RuntimePolicy
 from ..review import ReviewValidationError, parse_review_verdict
+from ..tools.runner import run_command
 from .models import EvalRequest, EvalResult
 
 # Default policy for direct/programmatic callers that don't pass one
@@ -92,20 +92,28 @@ class PRAgentReviewAdapter:
         allowlist = CredentialAllowlist(provider=self.name, env_prefixes=("PR_AGENT_",))
         environment = build_subprocess_env(allowlist)
         try:
-            completed = subprocess.run(
-                list(self.command), input=json.dumps(payload, sort_keys=True), text=True,
-                capture_output=True, timeout=request.timeout_s, check=False, shell=False, env=environment,
+            completed = run_command(
+                self.command,
+                cwd=".",
+                timeout_s=request.timeout_s,
+                max_output_bytes=self.max_output_bytes,
+                input_text=json.dumps(payload, sort_keys=True),
+                environment=environment,
+                # PR-Agent is a fixed, operator-configured bridge. Its
+                # subprocess environment is still allowlisted and sanitized;
+                # command_policy remains intentionally scoped to repository
+                # quality commands and generated Git operations.
+                enforce_policy=False,
             )
-        except subprocess.TimeoutExpired:
-            return EvalResult(request_id=request.request_id, provider=self.name, status="failed", error_type="timeout")
-        except OSError as exc:
+        except (OSError, PermissionError) as exc:
             return EvalResult(request_id=request.request_id, provider=self.name, status="failed", error_type=type(exc).__name__, error_message=redact_text(str(exc)[:500]))
 
         # Measure and enforce the byte budget before anything else, and
         # regardless of exit code — a failing subprocess with oversized
         # stdout must still be classified output_limit, not bridge_exit.
-        stdout_bytes = completed.stdout.encode("utf-8", errors="replace")
-        if len(stdout_bytes) > self.max_output_bytes:
+        if completed.timed_out:
+            return EvalResult(request_id=request.request_id, provider=self.name, status="failed", error_type="timeout")
+        if completed.output_truncated:
             return EvalResult(request_id=request.request_id, provider=self.name, status="failed", error_type="output_limit")
         raw_stdout = redact_text(completed.stdout)
         if completed.returncode != 0:
