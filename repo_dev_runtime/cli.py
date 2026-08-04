@@ -4,15 +4,12 @@ import argparse
 import json
 import os
 import shlex
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Sequence
 
 from .manifest import load_manifest
 from .discovery import probe_repository, validate_consumer
-from .runtimes.ollama import OllamaRuntime
-from .runtimes.openai_compatible import OpenAICompatibleRuntime
 from .runtimes.factory import default_registry
 from .runtimes.registry import RuntimeRouter
 from .runtimes.dry_run import DryRunRuntime

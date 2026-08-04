@@ -16,3 +16,11 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 include = ["repo_dev_runtime*"]
+
+[tool.ruff.lint]
+# Scoped to genuine-bug signal (unused imports/vars, undefined names, syntax
+# errors) rather than ruff's broader default rule set (import sorting,
+# typing modernization, style preferences) — those would force a large,
+# low-value reformatting diff across files with no correctness change.
+# See docs/type-and-lint-policy.md for the mypy decision alongside this one.
+select = ["F", "E9"]

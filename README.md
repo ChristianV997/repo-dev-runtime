@@ -11,14 +11,23 @@ and test isolated worktrees, but this v1 runtime never merges or deploys.
 
 ## First use
 
-```powershell
+```bash
 python -m repo_dev_runtime.cli probe .
 python -m repo_dev_runtime.cli init-manifest .
 python -m pytest -q
 ```
 
-The package is intentionally stdlib-only. Provider SDKs and sidecars remain
-external processes or HTTP services behind bounded adapters.
+The package is intentionally stdlib-only and cross-platform (Linux, macOS,
+Windows); examples below use POSIX/bash syntax, but every command is a
+plain `python -m ...` invocation that works unchanged on Windows (PowerShell
+or cmd) — only the path separators and line-continuation character differ.
+Provider SDKs and sidecars remain external processes or HTTP services behind
+bounded adapters.
+
+If you run `pytest tests/` directly instead of `python -m pytest`, the
+package won't be on `sys.path` unless it's installed (`pip install -e .`)
+or `PYTHONPATH=.` is set — `python -m pytest` avoids this by adding the
+current directory to `sys.path` itself.
 
 ## Repository neutrality
 
@@ -26,9 +35,9 @@ external processes or HTTP services behind bounded adapters.
 NeuroTopology-Sim are consumers, not runtime dependencies. Their manifests can
 be checked without changing either checkout:
 
-```powershell
+```bash
 python -m repo_dev_runtime.cli validate-consumers \
-  C:\path\to\MarketOS C:\path\to\NeuroTopology-Sim
+  /path/to/MarketOS /path/to/NeuroTopology-Sim
 ```
 
 Reviewed reusable capabilities are tracked in
@@ -44,9 +53,9 @@ Scheduling is declarative and one-shot; no background daemon is implemented.
 
 Live orchestration is opt-in and provider health is checked before routing:
 
-```powershell
-python -m repo_dev_runtime.cli run C:\path\to\repository `
-  --prompt "Inspect the failing test and propose a minimal fix" `
+```bash
+python -m repo_dev_runtime.cli run /path/to/repository \
+  --prompt "Inspect the failing test and propose a minimal fix" \
   --live --enable-ollama
 ```
 
@@ -54,8 +63,9 @@ Use `--resume --run-id <id>` to continue an interrupted inspection run. Live
 `--apply-edits` runs are intentionally not resumable yet: their disposable
 worktree is removed, and the runtime will not reuse cached results without a
 durable patch-replay record. Artifacts default
-to `%USERPROFILE%\.repo-dev-runtime\runs\<repository>` rather than modifying
-the consumer checkout. Paid runtimes require `--approve-paid` and explicit
+to `~/.repo-dev-runtime/runs/<repository>` (`%USERPROFILE%\.repo-dev-runtime\runs\<repository>`
+on Windows) rather than modifying the consumer checkout. Paid runtimes
+require `--approve-paid` and explicit
 policy enablement. `--create-pr` additionally requires the consumer manifest to
 allow PR creation and only publishes a generated `repo-dev/*` branch; merging
 is never automated.
@@ -66,7 +76,7 @@ is never automated.
 scoring external providers (coding agents, reviewer bridges,
 repository-context tools) without weakening the governance model above:
 
-```powershell
+```bash
 python -m repo_dev_runtime.cli benchmark --provider fake --fake-reviewer
 python -m repo_dev_runtime.cli benchmark --provider ollama --live --enable-ollama
 python -m repo_dev_runtime.cli benchmark --provider-module my_package.my_module:MyRuntime --live

@@ -1,7 +1,7 @@
 import json
 
 from repo_dev_runtime.governance.policy import RuntimePolicy
-from repo_dev_runtime.manifest import detect_manifest, load_manifest
+from repo_dev_runtime.manifest import load_manifest
 
 
 def test_detect_python_manifest(tmp_path):

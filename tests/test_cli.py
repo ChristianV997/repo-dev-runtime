@@ -5,7 +5,6 @@ import sys
 import pytest
 
 from repo_dev_runtime import cli
-from repo_dev_runtime.eval.fixtures import FIXTURE_CASES
 from repo_dev_runtime.eval.models import EvalRequest, FixtureCaseResult
 
 

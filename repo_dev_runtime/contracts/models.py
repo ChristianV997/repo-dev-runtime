@@ -7,7 +7,7 @@ import math
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 
 def now_iso() -> str:
