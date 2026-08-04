@@ -8,7 +8,7 @@ import shutil
 from typing import Mapping, Sequence
 
 from ..contracts.models import RuntimeHealth, SensorRequest, SensorResult
-from ..governance.credentials import CredentialAllowlist, build_subprocess_env
+from ..governance.credentials import CredentialAllowlist, build_subprocess_env, redact_text
 from ..tools.runner import run_command
 
 
@@ -65,4 +65,4 @@ class AgentReachSensor:
                 raise ValueError("records must be a list")
             return SensorResult(request.request_id, self.name, "succeeded", tuple(x for x in records if isinstance(x, Mapping)))
         except (OSError, PermissionError, json.JSONDecodeError, TypeError, ValueError) as exc:
-            return SensorResult(request.request_id, self.name, "failed", error_type=type(exc).__name__, error_message=str(exc)[:500])
+            return SensorResult(request.request_id, self.name, "failed", error_type=type(exc).__name__, error_message=redact_text(str(exc)[:500]))

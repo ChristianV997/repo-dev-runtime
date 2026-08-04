@@ -9,6 +9,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from ..contracts.models import DevResult, DevTask, RuntimeHealth
+from ..governance.credentials import redact_text
 
 
 def _prompt(task: DevTask, runtime: str) -> str:
@@ -58,7 +59,7 @@ class HermesRuntime:
             content = body["choices"][0]["message"]["content"]
             return DevResult(task.task_id, self.name, "succeeded", output=str(content), telemetry={"duration_ms": round((time.perf_counter() - started) * 1000, 2)})
         except (HTTPError, URLError, TimeoutError, OSError, KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            return DevResult(task.task_id, self.name, "failed", error_type=type(exc).__name__, error_message=str(exc)[:500], telemetry={"duration_ms": round((time.perf_counter() - started) * 1000, 2)})
+            return DevResult(task.task_id, self.name, "failed", error_type=type(exc).__name__, error_message=redact_text(str(exc)[:500]), telemetry={"duration_ms": round((time.perf_counter() - started) * 1000, 2)})
 
 
 class DeerFlowRuntime:
@@ -116,4 +117,4 @@ class DeerFlowRuntime:
                 raise ValueError("DeerFlow stream contained no assistant content")
             return DevResult(task.task_id, self.name, "succeeded", output=content, telemetry={"duration_ms": round((time.perf_counter() - started) * 1000, 2)})
         except (HTTPError, URLError, TimeoutError, OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            return DevResult(task.task_id, self.name, "failed", error_type=type(exc).__name__, error_message=str(exc)[:500], telemetry={"duration_ms": round((time.perf_counter() - started) * 1000, 2)})
+            return DevResult(task.task_id, self.name, "failed", error_type=type(exc).__name__, error_message=redact_text(str(exc)[:500]), telemetry={"duration_ms": round((time.perf_counter() - started) * 1000, 2)})
