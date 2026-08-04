@@ -49,7 +49,7 @@
       "source_commit": "82ff384",
       "source_path": "tools/local_agents/agent_roles.py",
       "capability": "role permissions and human boundaries",
-      "adaptation": "generalized into repo_dev_runtime.governance.roles"
+      "adaptation": "reviewed as input for role and human-boundary design; the unused governance.roles scaffold was removed because it did not enforce runtime behavior. Active role boundaries are implemented by the workflow and command-policy paths instead."
     },
     {
       "source_repository": "NeuroTopology-Sim",
