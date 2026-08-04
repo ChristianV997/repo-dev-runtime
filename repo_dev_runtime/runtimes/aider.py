@@ -25,11 +25,17 @@ from typing import Mapping, Sequence
 from ..contracts.models import DevResult, DevTask, RuntimeHealth
 from ..edits import SCHEMA
 from ..governance.credentials import CredentialAllowlist, build_subprocess_env, redact_text
+from ..path_policy import path_allowed
 
 _CONTRACT_VALUE = re.compile(r"\b(?P<name>task_id|base_commit|context_hash)=([0-9a-f]+)")
 _MAX_FILES = 100
 _MAX_INPUT_BYTES = 2_000_000
-_EXCLUDED_PARTS = {".git", "__pycache__", "node_modules", ".venv", "venv"}
+_MAX_FILE_BYTES = 1_000_000
+_EXCLUDED_PARTS = {
+    ".git", ".hg", ".svn", ".dev-runtime", ".repo-dev-worktrees",
+    "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    "node_modules", ".venv", "venv", "env", "dist", "build", "target",
+}
 
 
 def _command_from_env() -> tuple[str, ...]:
@@ -44,12 +50,7 @@ def _command_from_env() -> tuple[str, ...]:
 
 
 def _inside_allowed(relative: str, allowed_paths: tuple[str, ...]) -> bool:
-    if not allowed_paths:
-        return False
-    return "." in allowed_paths or any(
-        relative == prefix.rstrip("/") or relative.startswith(prefix.rstrip("/") + "/")
-        for prefix in allowed_paths
-    )
+    return path_allowed(relative, allowed_paths, (), empty_allowed=False)
 
 
 def _safe_relative(root: Path, path: Path, allowed_paths: tuple[str, ...]) -> str | None:
@@ -58,16 +59,19 @@ def _safe_relative(root: Path, path: Path, allowed_paths: tuple[str, ...]) -> st
     except ValueError:
         return None
     parts = PurePosixPath(relative).parts
-    if not relative or any(part in _EXCLUDED_PARTS or part.startswith(".") for part in parts):
+    if not relative or any(part.casefold() in _EXCLUDED_PARTS or part.startswith(".") for part in parts):
         return None
-    if Path(relative).name.startswith(".env") or not _inside_allowed(relative, allowed_paths):
+    if Path(relative).name.casefold().startswith(".env") or not _inside_allowed(relative, allowed_paths):
         return None
     return relative
 
 
 def _read_text(path: Path, *, max_bytes: int) -> str | None:
     try:
-        data = path.read_bytes()
+        if path.stat().st_size > max_bytes:
+            return None
+        with path.open("rb") as stream:
+            data = stream.read(max_bytes + 1)
     except OSError:
         return None
     if not data or len(data) > max_bytes or b"\0" in data:
@@ -82,22 +86,33 @@ def _snapshot(root: Path, allowed_paths: tuple[str, ...], *, max_files: int, max
     """Collect bounded, ordinary text files without following symlinks."""
     files: dict[str, str] = {}
     total = 0
-    for path in sorted(root.rglob("*")):
-        if len(files) >= max_files:
-            break
-        if not path.is_file() or path.is_symlink():
-            continue
-        relative = _safe_relative(root, path, allowed_paths)
-        if relative is None:
-            continue
-        content = _read_text(path, max_bytes=max_bytes)
-        if content is None:
-            continue
-        size = len(content.encode("utf-8"))
-        if total + size > max_bytes:
-            continue
-        files[relative] = content
-        total += size
+    for current, directories, filenames in os.walk(root, topdown=True, followlinks=False):
+        directories[:] = sorted(
+            directory for directory in directories
+            if directory.casefold() not in _EXCLUDED_PARTS
+            and not directory.startswith(".")
+            and not (Path(current) / directory).is_symlink()
+        )
+        for filename in sorted(filenames):
+            if len(files) >= max_files:
+                return files
+            path = Path(current) / filename
+            if path.is_symlink():
+                continue
+            relative = _safe_relative(root, path, allowed_paths)
+            if relative is None:
+                continue
+            remaining = max_bytes - total
+            if remaining <= 0:
+                return files
+            content = _read_text(path, max_bytes=min(_MAX_FILE_BYTES, remaining))
+            if content is None:
+                continue
+            size = len(content.encode("utf-8"))
+            if total + size > max_bytes:
+                continue
+            files[relative] = content
+            total += size
     return files
 
 
