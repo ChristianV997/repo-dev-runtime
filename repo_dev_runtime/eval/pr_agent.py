@@ -21,12 +21,7 @@ from ..governance.policy import RuntimePolicy
 from ..review import ReviewValidationError, parse_review_verdict
 from ..tools.runner import run_command
 from .models import EvalRequest, EvalResult
-
-# Default policy for direct/programmatic callers that don't pass one
-# explicitly — see eval.loader's identical rationale. cli.py always passes
-# its own real, gated policy (requiring --live plus explicit
-# --approve-external-provider-benchmark) at construction time.
-_PERMISSIVE_DEFAULT_POLICY = RuntimePolicy(network_access=True, allow_external_provider_benchmark=True)
+from .policy_defaults import PERMISSIVE_DEFAULT_POLICY
 
 
 def _parse_command_env() -> tuple[str, ...]:
@@ -53,7 +48,7 @@ class PRAgentReviewAdapter:
 
     name = "pr_agent"
 
-    def __init__(self, *, command: Sequence[str] | None = None, enabled: bool | None = None, max_output_bytes: int = 512_000, required_credential: str | None = None, policy: RuntimePolicy | None = None) -> None:
+    def __init__(self, *, command: Sequence[str] | None = None, enabled: bool | None = None, max_output_bytes: int = 512_000, required_credential: str | None = None, policy: RuntimePolicy | None = None, approved: bool = True) -> None:
         self.command = tuple(command) if command else _parse_command_env()
         self.enabled = enabled if enabled is not None else os.getenv("DEV_RUNTIME_PR_AGENT", "false").lower() in {"1", "true", "yes", "on"}
         self.max_output_bytes = max(1_024, int(max_output_bytes))
@@ -61,7 +56,14 @@ class PRAgentReviewAdapter:
         # Defaults to a permissive policy for direct/programmatic callers
         # (see module-level note); cli.py always passes its own real,
         # gated policy explicitly.
-        self.policy = policy or _PERMISSIVE_DEFAULT_POLICY
+        self.policy = policy or PERMISSIVE_DEFAULT_POLICY
+        # Per-run approval, threaded into authorize() rather than
+        # hard-coded there: hard-coding True satisfies the check
+        # unconditionally, leaving a caller that passes a strict policy
+        # unable to express "enabled, but not approved for this run".
+        # Defaults to True so the existing cli.py path — which gates on
+        # the real operator flag before constructing this — is unchanged.
+        self.approved = approved
 
     def health(self) -> RuntimeHealth:
         if not self.enabled or not self.command:
@@ -75,7 +77,7 @@ class PRAgentReviewAdapter:
         if not self.command:
             return EvalResult(request_id=request.request_id, provider=self.name, status="blocked", error_type="command_not_configured")
         try:
-            self.policy.authorize("pr_agent_review", approved=True)
+            self.policy.authorize("pr_agent_review", approved=self.approved)
         except PermissionError as exc:
             return EvalResult(request_id=request.request_id, provider=self.name, status="blocked", error_type="policy_denied", error_message=str(exc))
         if self.required_credential and not os.getenv(self.required_credential):

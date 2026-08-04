@@ -1,7 +1,13 @@
 """Declarative, one-shot scheduling and resumable task state.
 
-Standalone and independently tested: DevelopmentWorkflow (workflow.py)
-does not call TaskStateStore. Its own resume mechanism is self-sufficient
+Callers that need to serialize repeated invocations of the same task (for
+example a cron-driven runner keyed on a schedule name) should use
+``TaskStateStore.claim()`` rather than ``load()`` + ``update()``: only
+``claim()`` performs the check and the write under a single lock, so two
+concurrent invocations cannot both decide the task is unclaimed.
+
+DevelopmentWorkflow (workflow.py) does not call TaskStateStore. Its own
+resume mechanism is self-sufficient
 - it tracks per-role/promotion status directly via checksum-covered
 RunEnvelope artifacts, so it does not need this module's lower-level,
 single-host, one-shot task-state tracking underneath it. This module
@@ -17,11 +23,17 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Collection
 
 
 _MAX_STATE_BYTES = 2_000_000
 _LOCK_TIMEOUT_S = 10.0
+_VALID_STATUSES = frozenset({"pending", "running", "succeeded", "failed", "blocked"})
+
+
+def _validate_task_entry(task_id: str, status: str) -> None:
+    if not isinstance(task_id, str) or not task_id.strip() or len(task_id) > 256 or status not in _VALID_STATUSES:
+        raise ValueError("invalid task state")
 
 
 @dataclass(frozen=True)
@@ -108,27 +120,54 @@ class TaskStateStore:
         with self._lock():
             return self._load_unlocked()
 
+    def _write_unlocked(self, state: dict[str, Any]) -> None:
+        """Replace the state file atomically. Caller must hold ``_lock()``."""
+        payload = json.dumps(state, indent=2, sort_keys=True, allow_nan=False) + "\n"
+        if len(payload.encode("utf-8")) > _MAX_STATE_BYTES:
+            raise ValueError("task state exceeds size limit")
+        descriptor, temporary_name = tempfile.mkstemp(prefix=f".{self.path.name}.", suffix=".tmp", dir=self.path.parent)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_name, self.path)
+        except Exception:
+            try:
+                os.unlink(temporary_name)
+            except FileNotFoundError:
+                pass
+            raise
+
     def update(self, task_id: str, status: str, **details: Any) -> dict[str, Any]:
-        if not isinstance(task_id, str) or not task_id.strip() or len(task_id) > 256 or status not in {"pending", "running", "succeeded", "failed", "blocked"}:
-            raise ValueError("invalid task state")
+        _validate_task_entry(task_id, status)
         with self._lock():
             state = self._load_unlocked()
             state[task_id] = {"status": status, **details}
-            payload = json.dumps(state, indent=2, sort_keys=True, allow_nan=False) + "\n"
-            if len(payload.encode("utf-8")) > _MAX_STATE_BYTES:
-                raise ValueError("task state exceeds size limit")
-            descriptor, temporary_name = tempfile.mkstemp(prefix=f".{self.path.name}.", suffix=".tmp", dir=self.path.parent)
-            try:
-                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                    stream.write(payload)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.replace(temporary_name, self.path)
-            except Exception:
-                try:
-                    os.unlink(temporary_name)
-                except FileNotFoundError:
-                    pass
-                raise
+            self._write_unlocked(state)
+            return state[task_id]
+
+    def claim(self, task_id: str, status: str, *, unless_status: Collection[str] = (), **details: Any) -> dict[str, Any] | None:
+        """Atomically take ownership of ``task_id`` unless already claimed.
+
+        ``load()`` followed by ``update()`` is two separate lock
+        acquisitions, so two concurrent callers can both observe an
+        unclaimed task and both proceed - a time-of-check/time-of-use race
+        that callers cannot close from the outside. This performs the read
+        and the conditional write inside a *single* lock acquisition.
+
+        Returns the new entry when the claim succeeded, or ``None`` when
+        the existing entry's status is in ``unless_status`` (already
+        claimed or already finished), leaving the stored state untouched.
+        """
+        _validate_task_entry(task_id, status)
+        blocked_statuses = frozenset(unless_status)
+        with self._lock():
+            state = self._load_unlocked()
+            existing = state.get(task_id)
+            if isinstance(existing, dict) and existing.get("status") in blocked_statuses:
+                return None
+            state[task_id] = {"status": status, **details}
+            self._write_unlocked(state)
             return state[task_id]
 

@@ -22,16 +22,7 @@ import importlib
 from typing import Any
 
 from ..governance.policy import RuntimePolicy
-
-# Default policy for direct/programmatic callers that don't pass one
-# explicitly. Permissive by design: this is a defense-in-depth hook, not
-# the primary enforcement point — repo_dev_runtime.cli always constructs
-# and passes its own real, gated policy (requiring --live plus explicit
-# --approve-external-provider-benchmark) at every call site. A caller who
-# imports this module directly and doesn't pass a policy gets today's
-# behavior (no gate), as an explicit, documented choice rather than a
-# silent gap.
-_PERMISSIVE_DEFAULT_POLICY = RuntimePolicy(network_access=True, allow_external_provider_benchmark=True)
+from .policy_defaults import PERMISSIVE_DEFAULT_POLICY
 
 
 class ProviderLoadError(ValueError):
@@ -60,7 +51,7 @@ def implements_development_runtime(candidate: Any) -> bool:
     return callable(getattr(candidate, "health", None)) and callable(getattr(candidate, "execute", None))
 
 
-def load_provider(target: str, *, policy: RuntimePolicy | None = None) -> Any:
+def load_provider(target: str, *, policy: RuntimePolicy | None = None, approved: bool = True) -> Any:
     """Import and instantiate a provider from ``module:ClassName``.
 
     Construction convention, tried in order: a zero-argument
@@ -74,10 +65,23 @@ def load_provider(target: str, *, policy: RuntimePolicy | None = None) -> Any:
     not just the later ``execute()`` call. Defaults to a permissive policy
     for direct/programmatic callers (see module docstring); ``cli.py``
     always passes its own real, gated policy explicitly.
+
+    ``approved`` is the per-run approval passed through to
+    ``RuntimePolicy.authorize``. Pass ``False`` to have a strict policy
+    actually reject the load; the ``True`` default preserves the existing
+    ``cli.py`` path, which authorizes with the real operator flag before
+    calling here.
     """
-    policy = policy or _PERMISSIVE_DEFAULT_POLICY
+    policy = policy or PERMISSIVE_DEFAULT_POLICY
     try:
-        policy.authorize("external_provider_benchmark", approved=True)
+        # `approved` is threaded from the caller rather than hard-coded:
+        # hard-coding True satisfies the check unconditionally, so a caller
+        # passing a strict policy could not express "enabled, but not
+        # approved for this run". Defaults to True because cli.py already
+        # authorizes with the real operator flag before calling here, so
+        # flipping the default would break that path without a matching
+        # cli.py change.
+        policy.authorize("external_provider_benchmark", approved=approved)
     except PermissionError as exc:
         raise ProviderLoadError(f"provider loading is not authorized: {exc}") from exc
 

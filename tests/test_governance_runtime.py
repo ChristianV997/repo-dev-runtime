@@ -86,6 +86,56 @@ def test_scheduler_state_rejects_symlinked_state_file(tmp_path):
         TaskStateStore(link).load()
 
 
+def test_task_state_claim_is_atomic_check_and_set(tmp_path):
+    """Regression test: TaskStateStore exposed only load() and update(),
+    each taking the file lock separately, so a caller had to do
+    check-then-claim across two acquisitions. Two concurrent invocations
+    sharing a schedule key could both observe an unclaimed task and both
+    proceed — a TOCTOU race callers could not close from the outside.
+    claim() performs the read and the conditional write under one lock."""
+    store = TaskStateStore(tmp_path / "state.json")
+    guarded = ("running", "succeeded")
+
+    first = store.claim("nightly", "running", unless_status=guarded, run_id="a")
+    assert first is not None and first["status"] == "running"
+
+    # A second claimant must lose, and must not overwrite the winner.
+    assert store.claim("nightly", "running", unless_status=guarded, run_id="b") is None
+    assert store.load()["nightly"]["run_id"] == "a"
+
+    # A finished task stays claimed; an unguarded status can still be retried.
+    store.update("nightly", "succeeded")
+    assert store.claim("nightly", "running", unless_status=guarded) is None
+    store.update("nightly", "failed")
+    assert store.claim("nightly", "running", unless_status=guarded) is not None
+
+
+def test_concurrent_claims_elect_exactly_one_winner(tmp_path):
+    """The TOCTOU this closes is only observable under real concurrency:
+    with load()+update() every racer sees an unclaimed task and proceeds."""
+    store = TaskStateStore(tmp_path / "state.json")
+
+    def attempt(worker: int):
+        return store.claim("nightly", "running", unless_status=("running", "succeeded"), run_id=str(worker))
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = list(pool.map(attempt, range(8)))
+
+    winners = [item for item in outcomes if item is not None]
+    assert len(winners) == 1, f"exactly one claimant must win, got {len(winners)}"
+    # The stored state agrees with the single winner (no lost update).
+    assert store.load()["nightly"]["run_id"] == winners[0]["run_id"]
+
+
+def test_task_state_claim_validates_like_update(tmp_path):
+    store = TaskStateStore(tmp_path / "state.json")
+
+    with pytest.raises(ValueError, match="invalid task state"):
+        store.claim("", "running")
+    with pytest.raises(ValueError, match="invalid task state"):
+        store.claim("nightly", "not-a-status")
+
+
 def test_event_hash_is_stable_for_same_event_shape(tmp_path):
     first = RunEnvelope("one", tmp_path / "one")
     second = RunEnvelope("two", tmp_path / "two")
