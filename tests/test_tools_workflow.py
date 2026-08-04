@@ -221,6 +221,20 @@ def test_resume_rejects_tampered_request_identity(tmp_path):
         workflow.run(prompt="inspect original", run_id=first.run_id, resume=True)
 
 
+def test_resume_rejects_tampered_promotion_state(tmp_path):
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=("src",))
+    run_root = tmp_path / "runs"
+    workflow = DevelopmentWorkflow(manifest=manifest, policy=RuntimePolicy(), runtime=FakeRuntime(), artifacts_root=run_root)
+    first = workflow.run(prompt="inspect original")
+    promotion_path = run_root / first.run_id / "promotion.json"
+    promotion = json.loads(promotion_path.read_text(encoding="utf-8"))
+    promotion["status"] = "pr_created"
+    promotion_path.write_text(json.dumps(promotion), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="checksum"):
+        workflow.run(prompt="inspect original", run_id=first.run_id, resume=True)
+
+
 def test_live_edit_resume_blocks_tampered_replay_artifact(tmp_path):
     subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
