@@ -88,6 +88,26 @@ def test_load_provider_denies_when_policy_disallows_benchmarking():
         load_provider(f"{_MODULE}:SampleExternalProvider", policy=RuntimePolicy())
 
 
+def test_load_provider_honors_an_unapproved_run_even_when_the_policy_enables_benchmarking():
+    """Regression test: load_provider hard-coded ``approved=True`` in its
+    own ``authorize`` call, so the per-run approval half of the policy
+    contract was satisfied unconditionally from inside the callee. A
+    caller passing an *enabled* policy could not express "enabled, but not
+    approved for this run" — the same tautology that
+    test_external_provider_benchmark_requires_explicit_approval_even_when_enabled
+    guards against at the policy layer."""
+    from repo_dev_runtime.governance.policy import RuntimePolicy
+
+    enabled_policy = RuntimePolicy(network_access=True, allow_external_provider_benchmark=True)
+
+    with pytest.raises(ProviderLoadError, match="not authorized"):
+        load_provider(f"{_MODULE}:SampleExternalProvider", policy=enabled_policy, approved=False)
+
+    # The same policy still loads when the run *is* approved, so the gate
+    # tracks approval rather than just rejecting everything.
+    assert load_provider(f"{_MODULE}:SampleExternalProvider", policy=enabled_policy, approved=True) is not None
+
+
 def test_load_provider_succeeds_with_an_explicitly_authorized_policy():
     from repo_dev_runtime.governance.policy import RuntimePolicy
 

@@ -34,6 +34,22 @@ def test_blocked_when_enabled_but_no_command_configured():
     assert result.error_type == "command_not_configured"
 
 
+def test_blocked_when_the_run_is_not_approved_even_though_the_policy_enables_review():
+    """Regression test: review() hard-coded ``approved=True`` in its own
+    authorize() call, so the per-run approval half of the policy contract
+    was satisfied unconditionally from inside the adapter — a caller
+    passing an *enabled* policy could not express "enabled, but not
+    approved for this run"."""
+    from repo_dev_runtime.governance.policy import RuntimePolicy
+
+    enabled_policy = RuntimePolicy(network_access=True, allow_external_provider_benchmark=True)
+    adapter = PRAgentReviewAdapter(command=["pr-agent-cli"], enabled=True, policy=enabled_policy, approved=False)
+
+    result = adapter.review(_request())
+    assert result.status == "blocked"
+    assert result.error_type == "policy_denied"
+
+
 def test_blocked_on_missing_required_credential(monkeypatch):
     monkeypatch.delenv("PR_AGENT_TOKEN", raising=False)
     adapter = PRAgentReviewAdapter(command=["pr-agent-cli"], enabled=True, required_credential="PR_AGENT_TOKEN")
