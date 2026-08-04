@@ -15,11 +15,11 @@ class RoutingPolicy:
     """Role routing with a local-first, fail-closed default."""
 
     preferred_by_role: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: {
-        "planner": ("ollama", "openai_compatible", "hermes", "deerflow"),
-        "implementer": ("aider", "ollama", "openai_compatible", "hermes", "deerflow"),
-        "tester": ("ollama", "openai_compatible"),
-        "reviewer": ("ollama", "openai_compatible", "hermes", "deerflow"),
-        "integrator": ("ollama", "openai_compatible"),
+        "planner": ("openai_compatible", "ollama", "hermes", "deerflow"),
+        "implementer": ("aider", "openai_compatible", "ollama", "hermes", "deerflow"),
+        "tester": ("openai_compatible", "ollama"),
+        "reviewer": ("openai_compatible", "ollama", "hermes", "deerflow"),
+        "integrator": ("openai_compatible", "ollama"),
     })
     max_calls: int = 20
 

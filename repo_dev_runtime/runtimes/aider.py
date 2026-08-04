@@ -281,7 +281,7 @@ class AiderRuntime:
                 home.mkdir()
                 allowlist = CredentialAllowlist(
                     provider=self.name,
-                    env_prefixes=("AIDER_", "OLLAMA_", "OPENAI_", "ANTHROPIC_"),
+                    env_prefixes=("AIDER_", "OLLAMA_", "OPENAI_", "ANTHROPIC_", "OPENROUTER_"),
                 )
                 environment = build_subprocess_env(allowlist)
                 # Keep all user-profile locations inside the disposable

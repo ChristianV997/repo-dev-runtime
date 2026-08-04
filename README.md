@@ -100,6 +100,35 @@ provider (`--enable-ollama`/`--enable-omniroute`) for the other roles and
 an independent reviewer (`--enable-omniroute` or `--enable-pr-agent`),
 enforced before the run starts. See `docs/aider-adapter.md`.
 
+### OpenRouter as primary, Ollama as backup
+
+`RoutingPolicy.preferred_by_role` (`runtimes/registry.py`) prefers
+`openai_compatible` over `ollama` for every role (implementer additionally
+tries `aider` first when enabled) — this is the repo's generic,
+vendor-neutral "OmniRoute" adapter, and OpenRouter's `v1/chat/completions`
+gateway is wire-compatible with it out of the box, no code change needed:
+
+```bash
+export DEV_OMNIROUTE_URL=https://openrouter.ai/api/v1
+export DEV_OMNIROUTE_TOKEN=$OPENROUTER_API_KEY
+export DEV_OMNIROUTE_MODEL=anthropic/claude-3.5-sonnet   # any OpenRouter model slug
+export DEV_OMNIROUTE_ENABLED=true
+
+python -m repo_dev_runtime.cli run /path/to/repository \
+  --prompt "Inspect the failing test and propose a minimal fix" \
+  --live --enable-omniroute --enable-ollama --approve-paid
+```
+
+`openai_compatible` is treated as a **paid runtime** by `RuntimePolicy`
+regardless of which vendor sits behind it, so making it the first
+preference for every role means **every `run` invocation now needs
+`--approve-paid`**, not just occasional escalation — omitting it makes
+every role fall through to `ollama` (or fail closed with
+`policy_denied`/`no_authorized_runtime` if Ollama isn't also enabled).
+Pass `--enable-ollama` alongside `--enable-omniroute` so a real local
+Ollama instance still serves as the automatic backup whenever OpenRouter
+is unreachable or `health()` reports it unconfigured.
+
 ## Evaluating external coding-agent providers
 
 `repo_dev_runtime/eval/` is a separate, controlled benchmark layer for

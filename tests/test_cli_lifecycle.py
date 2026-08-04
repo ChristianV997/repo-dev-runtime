@@ -31,31 +31,32 @@ class FakeOllamaRuntime:
     name = "ollama"
 
     def health(self) -> RuntimeHealth:
-        return RuntimeHealth(name="ollama", configured=True, reachable=True)
+        return RuntimeHealth(name=self.name, configured=True, reachable=True)
 
     def execute(self, task):
         if task.role == "implementer":
             base = re.search(r"base_commit=([0-9a-f]+)", task.prompt).group(1)
             context = re.search(r"context_hash=([0-9a-f]+)", task.prompt).group(1)
-            return DevResult(task.task_id, "ollama", "succeeded", output=json.dumps({
+            return DevResult(task.task_id, self.name, "succeeded", output=json.dumps({
                 "schema": "RepoDev.EditProposal.v1", "proposal_id": "proposal-1", "task_id": task.task_id,
                 "base_commit": base, "context_hash": context, "summary": "change value",
                 "edits": [{"path": "src/app.py", "format": "search_replace", "search": "value = 1", "replace": "value = 2"}],
             }))
         if task.role == "reviewer":
-            return DevResult(task.task_id, "ollama", "succeeded", output='{"schema":"RepoDev.ReviewVerdict.v1","approved":true,"summary":"safe","findings":[]}')
-        return DevResult(task.task_id, "ollama", "succeeded", output=task.role)
+            return DevResult(task.task_id, self.name, "succeeded", output='{"schema":"RepoDev.ReviewVerdict.v1","approved":true,"summary":"safe","findings":[]}')
+        return DevResult(task.task_id, self.name, "succeeded", output=task.role)
 
 
-class FakeIndependentReviewerRuntime:
+class FakeIndependentReviewerRuntime(FakeOllamaRuntime):
+    """A second, distinct provider standing in for OpenRouter
+    (``openai_compatible``): now first-preference for every role per
+    ``RoutingPolicy``, so it must handle the full role set like
+    ``FakeOllamaRuntime`` rather than only ``reviewer`` — the workflow's
+    own excluded_providers logic (not this fixture) is what proves
+    independent review, by falling back to ``ollama`` for the reviewer
+    role whenever this runtime already served as implementer."""
+
     name = "openai_compatible"
-
-    def health(self) -> RuntimeHealth:
-        return RuntimeHealth(name=self.name, configured=True, reachable=True)
-
-    def execute(self, task):
-        assert task.role == "reviewer"
-        return DevResult(task.task_id, self.name, "succeeded", output='{"schema":"RepoDev.ReviewVerdict.v1","approved":true,"summary":"safe","findings":[]}')
 
 
 @pytest.fixture
