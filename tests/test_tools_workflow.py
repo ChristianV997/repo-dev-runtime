@@ -57,6 +57,31 @@ class MalformedThenRepairRuntime(ProposalRuntime):
         return super().execute(task)
 
 
+class InterruptedProposalRuntime(ProposalRuntime):
+    def __init__(self):
+        self.tester_calls = 0
+
+    def execute(self, task):
+        if task.role == "tester":
+            self.tester_calls += 1
+            if self.tester_calls == 1:
+                return DevResult(task.task_id, "fake", "failed", error_type="transient_failure")
+        return super().execute(task)
+
+
+class CredentialProposalRuntime(ProposalRuntime):
+    def execute(self, task):
+        if task.role == "implementer":
+            base = re.search(r"base_commit=([0-9a-f]+)", task.prompt).group(1)
+            context = re.search(r"context_hash=([0-9a-f]+)", task.prompt).group(1)
+            return DevResult(task.task_id, "fake", "succeeded", output=json.dumps({
+                "schema": "RepoDev.EditProposal.v1", "proposal_id": "credential-proposal", "task_id": task.task_id,
+                "base_commit": base, "context_hash": context, "summary": "add a credential",
+                "edits": [{"path": "src/app.py", "format": "whole_file", "content": 'api_key = "not-for-artifacts"\n'}],
+            }))
+        return super().execute(task)
+
+
 def test_runner_redacts_credentials_and_blocks_network(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "secret")
     result = run_command(["python", "-m", "pytest", "--version"], cwd=tmp_path)
@@ -78,16 +103,68 @@ def test_runner_blocks_repository_mutation(tmp_path):
         raise AssertionError("repository mutation should be blocked")
 
 
-def test_live_edit_resume_fails_before_worktree_creation(tmp_path):
+def test_live_edit_resume_replays_checksum_validated_patches(tmp_path):
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("value = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "initial"], check=True)
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=(".",), test_command=("git", "status", "--short"))
+    runtime = InterruptedProposalRuntime()
+    workflow = DevelopmentWorkflow(manifest=manifest, policy=RuntimePolicy(), runtime=runtime, artifacts_root=tmp_path / "runs")
+
+    first = workflow.run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True)
+    assert first.status == "blocked"
+    run_dir = tmp_path / "runs" / first.run_id
+    assert (run_dir / "patch_replay.jsonl").exists()
+    assert (tmp_path / "src" / "app.py").read_text(encoding="utf-8") == "value = 1\n"
+
+    resumed = workflow.run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True, run_id=first.run_id, resume=True)
+    assert resumed.status == "ready_for_human_review"
+    assert runtime.tester_calls == 2
+    assert (tmp_path / "src" / "app.py").read_text(encoding="utf-8") == "value = 1\n"
+    events = (run_dir / "events.jsonl").read_text(encoding="utf-8")
+    assert "proposal_replayed" in events and "patch_replay_completed" in events
+
+
+def test_live_edit_resume_blocks_tampered_replay_artifact(tmp_path):
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("value = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "initial"], check=True)
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=(".",))
+    workflow = DevelopmentWorkflow(manifest=manifest, policy=RuntimePolicy(), runtime=InterruptedProposalRuntime(), artifacts_root=tmp_path / "runs")
+    first = workflow.run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True)
+    replay_path = tmp_path / "runs" / first.run_id / "patch_replay.jsonl"
+    replay_path.write_text(replay_path.read_text(encoding="utf-8") + "{}\n", encoding="utf-8")
+
+    resumed = workflow.run(prompt="change value", base_ref="main", dry_run=False, apply_edits=True, run_id=first.run_id, resume=True)
+    assert resumed.status == "blocked"
+    promotion = json.loads((tmp_path / "runs" / first.run_id / "promotion.json").read_text(encoding="utf-8"))
+    assert promotion["reason"] == "worktree_creation_or_patch_replay_failed"
+
+
+def test_live_edit_rejects_credential_shaped_proposals_before_replay_persistence(tmp_path):
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("value = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "initial"], check=True)
     manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=(".",))
 
-    with pytest.raises(ValueError, match="durable patch replay"):
-        DevelopmentWorkflow(manifest=manifest, policy=RuntimePolicy(), runtime=FakeRuntime()).run(
-            prompt="resume edit",
-            dry_run=False,
-            resume=True,
-            apply_edits=True,
-        )
+    result = DevelopmentWorkflow(manifest=manifest, policy=RuntimePolicy(), runtime=CredentialProposalRuntime(), artifacts_root=tmp_path / "runs").run(
+        prompt="change value", base_ref="main", dry_run=False, apply_edits=True,
+    )
+    assert result.status == "blocked"
+    assert not (tmp_path / "runs" / result.run_id / "patch_replay.jsonl").exists()
+    assert (tmp_path / "src" / "app.py").read_text(encoding="utf-8") == "value = 1\n"
 
 
 def test_manifest_cannot_elevate_network_policy(tmp_path):

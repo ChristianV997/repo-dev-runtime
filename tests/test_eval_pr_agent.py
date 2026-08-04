@@ -118,6 +118,35 @@ def test_valid_verdict_normalized_and_raw_kept_separately():
     assert result.raw_output != str(result.normalized)
 
 
+def test_adapter_forwards_bounded_baseline_contents_to_the_bridge():
+    script = (
+        "import json, sys; payload = json.load(sys.stdin); "
+        "assert payload['base_files'] == {'validator.py': 'def validate(value):\\n    return value\\n'}; "
+        "print(json.dumps({'schema':'RepoDev.ReviewVerdict.v1','approved':True,'summary':'ok','findings':[]}))"
+    )
+    adapter = PRAgentReviewAdapter(command=[sys.executable, "-c", script], enabled=True)
+    request = EvalRequest.create(
+        kind="reviewer",
+        objective="review a diff",
+        diff="diff --git a/validator.py b/validator.py",
+        base_files={"validator.py": "def validate(value):\n    return value\n"},
+    )
+
+    result = adapter.review(request)
+    assert result.status == "succeeded"
+
+
+def test_eval_request_rejects_unsafe_or_oversized_baseline_contents():
+    import pytest
+
+    with pytest.raises(ValueError, match="base_files"):
+        EvalRequest.create(kind="reviewer", objective="x", base_files={"../escape.py": "x"})
+    with pytest.raises(ValueError, match="base_files"):
+        EvalRequest.create(kind="reviewer", objective="x", base_files={".": "x"})
+    with pytest.raises(ValueError, match="1 MiB"):
+        EvalRequest.create(kind="reviewer", objective="x", base_files={"large.py": "x" * 1_000_001})
+
+
 def test_adapter_has_no_apply_merge_push_or_pr_capability():
     # Delegates to the shared conformance kit so this boundary rule has a
     # single definition that real adapters reuse.

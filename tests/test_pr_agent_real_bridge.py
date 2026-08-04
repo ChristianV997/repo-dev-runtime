@@ -69,8 +69,8 @@ def _llm_stub(content: str):
     }
 
 
-def _run_bridge(base_url: str, diff: str) -> subprocess.CompletedProcess:
-    payload = json.dumps({"request_id": "test-1", "objective": "review this change", "diff": diff})
+def _run_bridge(base_url: str, diff: str, *, base_files: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    payload = json.dumps({"request_id": "test-1", "objective": "review this change", "diff": diff, "base_files": base_files or {}})
     return subprocess.run(
         [sys.executable, str(_BRIDGE_SCRIPT)],
         input=payload, capture_output=True, text=True, timeout=30,
@@ -124,6 +124,28 @@ def test_bridge_fails_closed_on_unapplicable_diff():
     assert result.returncode != 0
     assert result.stdout.strip() == ""
     assert "could not be applied" in result.stderr
+
+
+def test_bridge_reviews_modified_file_when_given_its_bounded_baseline():
+    modify_existing_file_diff = (
+        "diff --git a/validator.py b/validator.py\n"
+        "index 7b82c68..36f17d0 100644\n"
+        "--- a/validator.py\n"
+        "+++ b/validator.py\n"
+        "@@ -1,2 +1,2 @@\n"
+        " def validate(value):\n"
+        "-    return value\n"
+        "+    return value.strip()\n"
+    )
+    with stub_server(_llm_stub(_CLEAN_REVIEW_YAML)) as server:
+        result = _run_bridge(
+            server.base_url,
+            modify_existing_file_diff,
+            base_files={"validator.py": "def validate(value):\n    return value\n"},
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert parse_review_verdict(result.stdout).approved is True
 
 
 def test_pr_agent_review_adapter_consumes_the_real_bridge_unmodified():

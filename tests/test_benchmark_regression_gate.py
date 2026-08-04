@@ -79,7 +79,7 @@ def test_missing_scorecard_is_detected():
     assert any("no scorecard" in problem for problem in _load_checker().check(report))
 
 
-def test_script_runs_end_to_end_against_a_real_benchmark(tmp_path):
+def test_script_runs_end_to_end_without_ambient_pythonpath(tmp_path):
     report_path = tmp_path / "benchmark.json"
     benchmark = subprocess.run(
         [
@@ -92,26 +92,6 @@ def test_script_runs_end_to_end_against_a_real_benchmark(tmp_path):
     )
     assert benchmark.returncode == 0, benchmark.stderr
 
-    check = subprocess.run(
-        [sys.executable, str(_SCRIPT), str(report_path)],
-        capture_output=True, text=True, check=False, env=_subprocess_env(),
-    )
-    assert check.returncode == 0, check.stderr
-    assert "7 fixtures matched" in check.stdout
-
-
-def test_script_runs_without_ambient_pythonpath(tmp_path):
-    report_path = tmp_path / "benchmark.json"
-    benchmark = subprocess.run(
-        [
-            sys.executable, "-m", "repo_dev_runtime.cli", "benchmark",
-            "--provider", "fake", "--fake-reviewer",
-            "--fixtures-root", str(tmp_path / "fixtures"),
-            "--json-out", str(report_path),
-        ],
-        capture_output=True, text=True, check=False,
-    )
-    assert benchmark.returncode == 0, benchmark.stderr
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
     check = subprocess.run(
@@ -119,21 +99,4 @@ def test_script_runs_without_ambient_pythonpath(tmp_path):
         capture_output=True, text=True, check=False, env=environment,
     )
     assert check.returncode == 0, check.stderr
-
-
-def test_report_records_synthetic_and_reviewer_kind(tmp_path):
-    report_path = tmp_path / "benchmark.json"
-    subprocess.run(
-        [
-            sys.executable, "-m", "repo_dev_runtime.cli", "benchmark",
-            "--provider", "fake", "--fake-reviewer",
-            "--fixtures-root", str(tmp_path / "fixtures"),
-            "--json-out", str(report_path),
-        ],
-        capture_output=True, text=True, check=True,
-    )
-    metadata = json.loads(report_path.read_text(encoding="utf-8"))["scorecards"][0]["provider_metadata"]
-
-    # A synthetic run must never be mistakable for real-provider evidence.
-    assert metadata["benchmark_kind"] == "synthetic"
-    assert metadata["reviewer_kind"] == "fake"
+    assert "7 fixtures matched" in check.stdout

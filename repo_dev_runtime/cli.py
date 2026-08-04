@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import tempfile
 from pathlib import Path
+from typing import Sequence
 
 from .manifest import load_manifest
 from .discovery import probe_repository, validate_consumer
@@ -22,7 +24,13 @@ from .eval.provider_specs import default_provider_specs
 from .eval.report import append_history, render_json_report, render_markdown_report
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the CLI.
+
+    ``argv`` keeps the console entry point unchanged while letting tests
+    exercise parsing and policy wiring without spawning a full fixture
+    benchmark process for every flag combination.
+    """
     parser = argparse.ArgumentParser(prog="repo-dev-runtime")
     sub = parser.add_subparsers(dest="command", required=True)
     probe = sub.add_parser("probe")
@@ -66,7 +74,7 @@ def main() -> int:
     benchmark.add_argument("--json-out")
     benchmark.add_argument("--markdown-out")
     benchmark.add_argument("--history-out", nargs="?", const="", help="append this run's JSON report as one JSONL line; defaults to ~/.repo-dev-runtime/eval-history/<date>.jsonl when given without a value")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.command == "probe":
         root = Path(args.path).resolve()
         manifest = load_manifest(root)
@@ -98,13 +106,14 @@ def main() -> int:
         if args.apply_edits and not args.live:
             print(json.dumps({"status": "blocked", "reason": "apply_edits_requires_live"}, indent=2))
             return 1
-        if args.resume and args.live and args.apply_edits:
-            print(json.dumps({"status": "blocked", "reason": "live_edit_resume_not_supported"}, indent=2))
-            return 1
         artifacts_root = Path(args.artifacts_root).expanduser() if args.artifacts_root else Path.home() / ".repo-dev-runtime" / "runs" / manifest.name
         runtime = RuntimeRouter(default_registry(ollama_enabled=args.enable_ollama if args.live else None, omniroute_enabled=args.enable_omniroute if args.live else None, hermes_enabled=args.enable_sidecars if args.live else None, deerflow_enabled=args.enable_sidecars if args.live else None), policy=policy) if args.live else DryRunRuntime()
         publisher = GitHubPublisher(policy=policy) if args.create_pr else None
-        result = DevelopmentWorkflow(manifest=manifest, policy=policy, runtime=runtime, artifacts_root=artifacts_root).run(prompt=args.prompt, base_ref=args.base_ref, dry_run=not args.live, run_id=args.run_id, resume=args.resume, approved=args.approve_paid, publisher=publisher, create_pr=args.create_pr, apply_edits=args.apply_edits, max_fix_attempts=args.max_fix_attempts)
+        try:
+            result = DevelopmentWorkflow(manifest=manifest, policy=policy, runtime=runtime, artifacts_root=artifacts_root).run(prompt=args.prompt, base_ref=args.base_ref, dry_run=not args.live, run_id=args.run_id, resume=args.resume, approved=args.approve_paid, publisher=publisher, create_pr=args.create_pr, apply_edits=args.apply_edits, max_fix_attempts=args.max_fix_attempts)
+        except (FileExistsError, FileNotFoundError, ValueError) as exc:
+            print(json.dumps({"status": "blocked", "reason": "workflow_request_invalid", "detail": str(exc)}, indent=2))
+            return 1
         print(json.dumps({"run_id": result.run_id, "status": result.status, "artifact_dir": result.artifact_dir, "results": [item.to_dict() for item in result.results]}, indent=2))
         return 0 if result.status in {"ready_for_human_review", "pr_created"} else 1
     if args.command == "benchmark":
@@ -199,7 +208,10 @@ def _run_benchmark(args) -> int:
         from .eval.pr_agent import PRAgentReviewAdapter
 
         reviewer_adapter = PRAgentReviewAdapter(
-            command=shlex.split(args.pr_agent_command) if args.pr_agent_command else None,
+            # POSIX tokenization corrupts Windows executable paths by treating
+            # backslashes as escapes. Keep this in sync with the environment
+            # parser used by PRAgentReviewAdapter.
+            command=shlex.split(args.pr_agent_command, posix=os.name != "nt") if args.pr_agent_command else None,
             enabled=True,
             required_credential=args.pr_agent_required_credential,
             policy=pr_agent_policy,

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import asdict, dataclass, field
+from pathlib import PurePosixPath
 from typing import Any, Mapping
 
 from ..contracts.models import _finite, now_iso
@@ -212,6 +213,10 @@ class EvalRequest:
     objective: str
     diff: str = ""
     repository_map_hint: str = ""
+    # Optional baseline contents for files changed by ``diff``. This lets an
+    # isolated reviewer materialize a correct pre-change tree without access
+    # to the consumer checkout.
+    base_files: Mapping[str, str] = field(default_factory=dict)
     timeout_s: float = 60.0
     max_output_bytes: int = 512_000
     dry_run: bool = True
@@ -232,6 +237,16 @@ class EvalRequest:
             raise ValueError("timeout_s is out of bounds")
         if not 1_024 <= int(self.max_output_bytes) <= 10_000_000:
             raise ValueError("max_output_bytes is out of bounds")
+        total_base_bytes = 0
+        for path, content in self.base_files.items():
+            if not isinstance(path, str) or not isinstance(content, str) or not path:
+                raise ValueError("base_files must use relative POSIX paths and text content")
+            parsed = PurePosixPath(path)
+            if not parsed.parts or parsed.is_absolute() or ".." in parsed.parts or "\\" in path or str(parsed) != path:
+                raise ValueError("base_files must use relative POSIX paths and text content")
+            total_base_bytes += len(content.encode("utf-8"))
+        if total_base_bytes > 1_000_000:
+            raise ValueError("base_files exceeds 1 MiB")
         _finite(asdict(self))
 
     def to_dict(self) -> dict[str, Any]:

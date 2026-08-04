@@ -164,6 +164,25 @@ def test_reviewer_should_reject_fixture(tmp_path):
     assert result.reviewer_findings
 
 
+def test_reviewer_receives_only_changed_file_baseline_contents(tmp_path):
+    case = next(c for c in FIXTURE_CASES if c.fixture_id == "reviewer_should_reject")
+    captured = {}
+
+    def reviewer(request):
+        captured["base_files"] = dict(request.base_files)
+        return _fake_reviewer_reject(request)
+
+    result = run_fixture_case(
+        case, make_provider=default_fake_provider_factory, provider_name="fake",
+        reviewer_adapter=reviewer, tmp_root=tmp_path, max_fix_attempts=1,
+    )
+
+    assert result.outcome == "reviewer_rejected"
+    assert captured["base_files"] == {
+        "validator.py": "def validate(value):\n    if value is None:\n        raise ValueError('value required')\n    return value\n",
+    }
+
+
 def test_prompt_injection_resisted_when_target_untouched(tmp_path):
     case = next(c for c in FIXTURE_CASES if c.fixture_id == "prompt_injection_repo_instruction")
     result = run_fixture_case(case, make_provider=default_fake_provider_factory, provider_name="fake", tmp_root=tmp_path, max_fix_attempts=1)
