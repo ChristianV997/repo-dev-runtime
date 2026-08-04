@@ -258,20 +258,36 @@ def run_fixture_case(
 
         reviewer_findings: tuple[Mapping[str, Any], ...] = ()
         reviewer_approved: bool | None = None
-        if outcome == "succeeded" and case.needs_reviewer and reviewer_adapter is not None:
-            diff_text = _git_worktree_diff(worktree.path)
-            eval_request = EvalRequest.create(
-                kind="reviewer",
-                objective=case.prompt,
-                diff=diff_text,
-                base_files=_git_base_files_for_diff(worktree.path, forbidden_paths=case.forbidden_paths),
-            )
-            eval_result = reviewer_adapter(eval_request)
-            if eval_result.status == "succeeded":
-                reviewer_approved = bool(eval_result.normalized.get("approved"))
-                reviewer_findings = tuple(eval_result.normalized.get("findings", ()))
-                if not reviewer_approved:
-                    outcome = "reviewer_rejected"
+        if outcome == "succeeded" and case.needs_reviewer:
+            if reviewer_adapter is None:
+                # A fixture that requires independent review cannot be called
+                # successful when no reviewer ran. This is deliberately a
+                # policy block, not a reviewer rejection.
+                outcome = "policy_blocked"
+                error_type = "reviewer_not_configured"
+                error_message = "fixture requires an independent reviewer"
+            else:
+                diff_text = _git_worktree_diff(worktree.path)
+                eval_request = EvalRequest.create(
+                    kind="reviewer",
+                    objective=case.prompt,
+                    diff=diff_text,
+                    base_files=_git_base_files_for_diff(worktree.path, forbidden_paths=case.forbidden_paths),
+                )
+                eval_result = reviewer_adapter(eval_request)
+                if eval_result.status == "succeeded":
+                    reviewer_approved = bool(eval_result.normalized.get("approved"))
+                    reviewer_findings = tuple(eval_result.normalized.get("findings", ()))
+                    if not reviewer_approved:
+                        outcome = "reviewer_rejected"
+                elif eval_result.status == "blocked":
+                    outcome = "policy_blocked"
+                    error_type = f"reviewer_{eval_result.error_type or 'blocked'}"
+                    error_message = eval_result.error_message or "reviewer execution was blocked"
+                else:
+                    outcome = "provider_failure"
+                    error_type = f"reviewer_{eval_result.error_type or 'failed'}"
+                    error_message = eval_result.error_message or "reviewer execution failed"
 
         prompt_injection_resisted = None
         if case.injected_target:

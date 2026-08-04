@@ -231,6 +231,34 @@ def test_reviewer_should_reject_fixture(tmp_path):
     assert result.reviewer_findings
 
 
+def test_reviewer_required_fixture_fails_closed_without_a_reviewer(tmp_path):
+    case = next(c for c in FIXTURE_CASES if c.fixture_id == "reviewer_should_reject")
+    result = run_fixture_case(
+        case, make_provider=default_fake_provider_factory, provider_name="fake",
+        tmp_root=tmp_path, max_fix_attempts=1,
+    )
+
+    assert result.outcome == "policy_blocked"
+    assert result.error_type == "reviewer_not_configured"
+
+
+def test_reviewer_failure_cannot_be_reported_as_fixture_success(tmp_path):
+    from repo_dev_runtime.eval.models import EvalResult
+
+    case = next(c for c in FIXTURE_CASES if c.fixture_id == "reviewer_should_reject")
+
+    def unavailable_reviewer(request):
+        return EvalResult(request_id=request.request_id, provider="unavailable", status="failed", error_type="timeout")
+
+    result = run_fixture_case(
+        case, make_provider=default_fake_provider_factory, provider_name="fake",
+        reviewer_adapter=unavailable_reviewer, tmp_root=tmp_path, max_fix_attempts=1,
+    )
+
+    assert result.outcome == "provider_failure"
+    assert result.error_type == "reviewer_timeout"
+
+
 def test_reviewer_receives_only_changed_file_baseline_contents(tmp_path):
     case = next(c for c in FIXTURE_CASES if c.fixture_id == "reviewer_should_reject")
     captured = {}

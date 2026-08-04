@@ -199,6 +199,7 @@ def _run_benchmark(args) -> int:
             return _runtime
 
     reviewer_adapter = None
+    reviewer_kind = "none"
     if args.enable_pr_agent:
         if not args.live:
             print(json.dumps({"status": "blocked", "reason": "real_provider_requires_live"}, indent=2))
@@ -212,7 +213,7 @@ def _run_benchmark(args) -> int:
 
         from .eval.pr_agent import PRAgentReviewAdapter
 
-        reviewer_adapter = PRAgentReviewAdapter(
+        adapter = PRAgentReviewAdapter(
             # POSIX tokenization corrupts Windows executable paths by treating
             # backslashes as escapes. Keep this in sync with the environment
             # parser used by PRAgentReviewAdapter.
@@ -220,18 +221,31 @@ def _run_benchmark(args) -> int:
             enabled=True,
             required_credential=args.pr_agent_required_credential,
             policy=pr_agent_policy,
-        ).review
-    elif args.fake_reviewer:
+        )
+        health = adapter.health()
+        if not health.configured:
+            print(json.dumps({"status": "blocked", "reason": "pr_agent_command_not_configured"}, indent=2))
+            return 1
+        if not health.reachable:
+            print(json.dumps({"status": "blocked", "reason": "pr_agent_command_not_found", "detail": health.detail}, indent=2))
+            return 1
+        reviewer_adapter = adapter.review
+        reviewer_kind = "real"
+    elif args.fake_reviewer or args.provider == "fake":
+        # The deterministic baseline must exercise every fixture, including
+        # the independent-review case. Real providers only get this reviewer
+        # when explicitly requested with --fake-reviewer.
         reviewer_adapter = FakePRAgentAdapter(
             approved=False,
             findings=[{"severity": "high", "path": "validator.py", "message": "removes required input validation"}],
         )
+        reviewer_kind = "fake"
 
     # Record how this run was produced, so a synthetic run is never later
     # mistaken for evidence about a real provider or a real reviewer.
     provider_metadata = dict(provider_metadata) | {
         "benchmark_kind": "synthetic" if not args.provider_module and args.provider == "fake" else "live_provider",
-        "reviewer_kind": "real" if args.enable_pr_agent else ("fake" if args.fake_reviewer else "none"),
+        "reviewer_kind": reviewer_kind,
     }
 
     selected_cases = tuple(case for case in FIXTURE_CASES if not args.fixture or case.fixture_id in args.fixture)
