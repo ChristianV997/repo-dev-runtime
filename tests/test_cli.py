@@ -61,7 +61,7 @@ def test_cli_dry_run_is_provider_independent(tmp_path):
     assert json.loads(result.stdout)["status"] == "ready_for_human_review"
 
 
-def test_cli_blocks_live_edit_resume_without_running_a_provider(tmp_path):
+def test_cli_reports_invalid_live_edit_resume_as_structured_block(tmp_path):
     result = subprocess.run(
         [
             sys.executable, "-m", "repo_dev_runtime.cli", "run", str(tmp_path),
@@ -72,7 +72,9 @@ def test_cli_blocks_live_edit_resume_without_running_a_provider(tmp_path):
         check=False,
     )
     assert result.returncode == 1
-    assert json.loads(result.stdout)["reason"] == "live_edit_resume_not_supported"
+    payload = json.loads(result.stdout)
+    assert payload["reason"] == "workflow_request_invalid"
+    assert "run does not exist" in payload["detail"]
 
 
 def test_cli_benchmark_defaults_to_fake_provider(tmp_path, capsys, fast_benchmark):
