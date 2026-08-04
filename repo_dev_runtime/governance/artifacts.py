@@ -13,6 +13,17 @@ from typing import Any
 from .credentials import redact_json
 
 
+# Bounds mirroring this codebase's other explicit external-facing caps
+# (scheduler.TaskStateStore._MAX_STATE_BYTES, runtimes.aider's
+# _MAX_INPUT_BYTES, tools.runner's max_output_bytes): events.jsonl is
+# append-only and grows across every --resume of the same run, and a run
+# directory's total artifact size has no other bound. Both are generous
+# for realistic volume (5 roles, <=3 repair attempts) and exist only to
+# fail closed rather than let either grow silently unbounded.
+_MAX_EVENTS_BYTES = 5_000_000
+_MAX_RUN_ARTIFACT_BYTES = 50_000_000
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -62,9 +73,13 @@ class RunEnvelope:
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         event["event_hash"] = _event_hash(sequence, name, safe_data)
+        line = json.dumps(event, sort_keys=True, allow_nan=False) + "\n"
+        existing_size = event_path.stat().st_size if event_path.exists() else 0
+        if existing_size + len(line.encode("utf-8")) > _MAX_EVENTS_BYTES:
+            raise ValueError(f"run event log exceeds maximum size of {_MAX_EVENTS_BYTES} bytes")
         self.events.append(event)
         with event_path.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps(event, sort_keys=True, allow_nan=False) + "\n")
+            stream.write(line)
 
     def write_json(self, name: str, payload: Any) -> Path:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -94,6 +109,7 @@ class RunEnvelope:
     def finalize(self, payload: dict[str, Any]) -> Path:
         envelope = self.write_json("manifest.json", payload)
         checksums: dict[str, str] = {}
+        total_bytes = 0
         for current, directories, filenames in os.walk(self.root, topdown=True, followlinks=False):
             current_path = Path(current)
             for directory in directories:
@@ -105,9 +121,12 @@ class RunEnvelope:
                     raise ValueError("run envelope cannot contain symlinks")
                 if not path.is_file():
                     continue
+                total_bytes += path.stat().st_size
                 name = path.relative_to(self.root).as_posix()
                 if name != "checksums.json":
                     checksums[name] = sha256_file(path)
+        if total_bytes > _MAX_RUN_ARTIFACT_BYTES:
+            raise ValueError(f"run envelope exceeds maximum size of {_MAX_RUN_ARTIFACT_BYTES} bytes")
         self.write_json("checksums.json", checksums)
         return envelope
 

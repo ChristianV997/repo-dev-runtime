@@ -71,9 +71,14 @@ def _request_hash(*, prompt: str, base_ref: str, dry_run: bool, apply_edits: boo
     })
 
 
-def _verify_resume_request(run_id: str, run_dir: Path, expected_hash: str) -> None:
-    """Require a checksum-covered request identity before resuming."""
-    envelope = RunEnvelope(run_id, run_dir)
+def _verify_resume_request(envelope: RunEnvelope, run_dir: Path, expected_hash: str) -> None:
+    """Require a checksum-covered request identity before resuming.
+
+    Takes the caller's already-constructed envelope rather than building a
+    second one: RunEnvelope.__post_init__ fully re-parses and re-validates
+    events.jsonl, so a second construction would pay that cost twice on
+    every resume for no reason.
+    """
     required = [_REQUEST_ARTIFACT]
     for name in (*(f"{role}.json" for role in ROLES), "promotion.json"):
         if (run_dir / name).exists():
@@ -181,8 +186,9 @@ class DevelopmentWorkflow:
             max_fix_attempts=max_fix_attempts,
             manifest=self.manifest,
         )
+        envelope = RunEnvelope(run_id, run_dir)
         if resume:
-            _verify_resume_request(run_id, run_dir, request_hash)
+            _verify_resume_request(envelope, run_dir, request_hash)
         # A resumed run that already reached a success terminal state
         # (promotion.json's "status", not WorkflowResult.status, which is
         # always "ready_for_human_review" on success) must not build a new
@@ -209,7 +215,6 @@ class DevelopmentWorkflow:
                 except json.JSONDecodeError:
                     cached_promotion = {}
                 already_completed = cached_promotion.get("status") in {"pr_created", "ready_for_human_review"}
-        envelope = RunEnvelope(run_id, run_dir)
         if not resume:
             _write_artifact(envelope, _REQUEST_ARTIFACT, {
                 "schema": _REQUEST_SCHEMA,

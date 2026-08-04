@@ -1,0 +1,16 @@
+{
+  "schema": "RepoDev.Repository.v1",
+  "name": "example-monorepo",
+  "root": ".",
+  "source_paths": ["backend"],
+  "test_command": ["python", "-m", "pytest", "backend", "-q"],
+  "lint_command": ["python", "-m", "ruff", "check", "backend"],
+  "security_command": [],
+  "allowed_paths": ["backend"],
+  "forbidden_paths": [".env", ".git", "credentials", "secrets", "frontend/node_modules"],
+  "agent_roles": ["planner", "implementer", "tester", "reviewer", "integrator"],
+  "network_access": false,
+  "pull_request_creation": true,
+  "check_timeout_s": 600.0,
+  "context_max_bytes": 4096
+}

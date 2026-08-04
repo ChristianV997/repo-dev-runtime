@@ -32,6 +32,32 @@ or a benchmark report. Tests in `tests/test_eval_credentials.py` prove a
 deliberately-leaked secret sentinel does not survive into captured
 subprocess output.
 
+## `GitHubPublisher` (`--create-pr`) credential requirements
+
+`repo_dev_runtime/integrations/github.py`'s `GitHubPublisher` is the only
+component in this package that reads a real, live-consequential
+credential. Concretely, an operator must provide:
+
+- **`GITHUB_TOKEN`** (or `GH_TOKEN` as a fallback) in the process
+  environment — a GitHub personal access token (classic, or fine-grained
+  with the equivalent scope) with **`repo`** scope, since `create_pr`
+  both pushes a generated branch and calls the Pull Requests API.
+  Without one set, `create_pull_request` raises `PermissionError`
+  (`GITHUB_TOKEN or GH_TOKEN is required for PR creation`) — it never
+  silently no-ops.
+- The consumer repository's **`origin` remote must be a `github.com`
+  URL** (`git@github.com:owner/repo.git` or
+  `https://github.com/owner/repo`) — `_owner_repo` parses it with a
+  `github.com` regex and raises `ValueError("origin is not a GitHub
+  remote")` for anything else (e.g. GitHub Enterprise, GitLab, a local
+  bare remote).
+- The branch pushed is always runtime-generated, matching
+  `repo-dev/[A-Za-z0-9._/-]+` (`publish_branch` rejects anything else) —
+  an operator never needs to (and cannot) name the branch themselves.
+
+See `docs/quickstart-consumer-onboarding.md` for these requirements in
+the context of a full worked `--create-pr` example.
+
 ## Missing credentials
 
 A provider adapter that requires a credential which is not set returns an

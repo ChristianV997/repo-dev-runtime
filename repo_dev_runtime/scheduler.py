@@ -1,4 +1,13 @@
-"""Declarative, one-shot scheduling and resumable task state."""
+"""Declarative, one-shot scheduling and resumable task state.
+
+Standalone and independently tested: DevelopmentWorkflow (workflow.py)
+does not call TaskStateStore. Its own resume mechanism is self-sufficient
+- it tracks per-role/promotion status directly via checksum-covered
+RunEnvelope artifacts, so it does not need this module's lower-level,
+single-host, one-shot task-state tracking underneath it. This module
+exists as a reusable library for callers who want that lower-level
+primitive on its own; it is not wired into any runtime entry point today.
+"""
 from __future__ import annotations
 
 import json
