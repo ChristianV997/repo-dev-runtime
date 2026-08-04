@@ -89,6 +89,16 @@ class EvidenceCapturingReviewerRuntime(ProposalRuntime):
         return super().execute(task)
 
 
+class FailingContextProvider:
+    name = "failing_context"
+
+    def capabilities(self):
+        return {"license": "test", "source_url": "", "vendored": False}
+
+    def build(self, *_args, **_kwargs):
+        raise RuntimeError("provider unavailable")
+
+
 class MalformedThenRepairRuntime(ProposalRuntime):
     def __init__(self):
         self.implementer_calls = 0
@@ -380,6 +390,21 @@ def test_five_role_workflow_writes_envelope(tmp_path):
     assert (tmp_path / "runs" / result.run_id / "promotion.json").exists()
     assert (tmp_path / "runs" / result.run_id / "checksums.json").exists()
     assert len(result.results) == 5
+
+
+def test_workflow_records_context_provider_and_falls_back_safely(tmp_path):
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=(".",))
+    result = DevelopmentWorkflow(
+        manifest=manifest,
+        policy=RuntimePolicy(),
+        runtime=FakeRuntime(),
+        context_provider=FailingContextProvider(),
+        artifacts_root=tmp_path / "runs",
+    ).run(prompt="inspect")
+
+    provider = json.loads((tmp_path / "runs" / result.run_id / "context_provider.json").read_text(encoding="utf-8"))
+    assert provider["requested"] == "failing_context"
+    assert provider["used"] == "static_map"
 
 
 def test_workflow_redacts_provider_output_before_artifact_persistence(tmp_path):

@@ -3,8 +3,9 @@ from .ollama import OllamaRuntime
 from .aider import AiderRuntime
 from .openclaw import OpenClawRuntime
 from .sidecars import DeerFlowRuntime, HermesRuntime
+from .pr_agent_reviewer import PRAgentReviewerRuntime
 from .factory import default_registry
 from .registry import RoutingPolicy, RuntimeRegistry, RuntimeRouter
 from .dry_run import DryRunRuntime
 
-__all__ = ["AiderRuntime", "DeerFlowRuntime", "HermesRuntime", "OpenAICompatibleRuntime", "OllamaRuntime", "OpenClawRuntime", "DryRunRuntime", "RoutingPolicy", "RuntimeRegistry", "RuntimeRouter", "default_registry"]
+__all__ = ["AiderRuntime", "DeerFlowRuntime", "HermesRuntime", "OpenAICompatibleRuntime", "OllamaRuntime", "OpenClawRuntime", "PRAgentReviewerRuntime", "DryRunRuntime", "RoutingPolicy", "RuntimeRegistry", "RuntimeRouter", "default_registry"]

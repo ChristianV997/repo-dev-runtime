@@ -31,6 +31,12 @@ House rules every adapter follows, taken from the existing ones:
   grant it the governed worktree directly; `runtimes/aider.py` is the
   reference boundary for this case.
 
+Context providers may be passed programmatically to `DevelopmentWorkflow`.
+The workflow records their requested and actual provider names in the run
+envelope, then falls back to the dependency-free static map on any failure.
+They provide read-only prompt context only; they cannot edit, test, publish,
+or influence promotion policy.
+
 ## 2. Assert the contract with the shared kit
 
 Call the relevant `assert_*_contract` from `eval/conformance.py` in your

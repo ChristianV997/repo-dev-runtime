@@ -17,9 +17,9 @@ from .tools.runner import run_command
 from .runtimes.registry import RuntimeRouter
 from .workspaces import WorktreeManager
 from .integrations.github import GitHubPublisher
-from .context import build_adaptive_context
 from .contracts.models import sha256_json
 from .edits import PatchApplier, PatchValidationError, parse_edit_proposal
+from .eval.context_providers import ContextProvider, StaticMapContextProvider, resolve_context_provider
 from .review import ReviewValidationError, parse_review_verdict
 
 
@@ -167,6 +167,7 @@ class DevelopmentWorkflow:
         policy: RuntimePolicy,
         runtime: object,
         reviewer_runtime: object | None = None,
+        context_provider: ContextProvider | None = None,
         artifacts_root: str | Path | None = None,
     ) -> None:
         manifest.validate()
@@ -179,7 +180,25 @@ class DevelopmentWorkflow:
         # may be supplied here instead, but it still has to identify itself
         # differently in its DevResult.
         self.reviewer_runtime = reviewer_runtime or runtime
+        self.context_provider = context_provider or StaticMapContextProvider()
         self.artifacts_root = Path(artifacts_root or Path(manifest.root) / ".dev-runtime" / "runs")
+
+    def _build_context(self, root: str, *, objective: str) -> tuple[str, str, str]:
+        """Build bounded context through the configured provider or fallback.
+
+        Rich providers are optional helpers. Any provider failure is recorded
+        by the selected provider name and falls back to the deterministic,
+        dependency-free repository map rather than failing an otherwise safe
+        run or silently omitting context.
+        """
+        return resolve_context_provider(
+            self.context_provider,
+            root=root,
+            objective=objective,
+            allowed_paths=self.manifest.allowed_paths,
+            forbidden_paths=self.manifest.forbidden_paths,
+            max_bytes=self.manifest.context_max_bytes,
+        )
 
     def run(self, *, prompt: str, base_ref: str = "HEAD", dry_run: bool = True, run_id: str | None = None, resume: bool = False, approved: bool = False, publisher: GitHubPublisher | None = None, create_pr: bool = False, apply_edits: bool = False, max_fix_attempts: int = 0) -> WorkflowResult:
         if apply_edits and dry_run:
@@ -258,10 +277,15 @@ class DevelopmentWorkflow:
                 if worktree is not None:
                     WorktreeManager(self.manifest.root).remove(worktree)
                 return WorkflowResult(run_id, "blocked", (), str(run_dir))
-        repository_context, repository_map = build_adaptive_context(worktree_path, objective=prompt, allowed_paths=self.manifest.allowed_paths, forbidden_paths=self.manifest.forbidden_paths, max_bytes=self.manifest.context_max_bytes)
+        repository_context, repository_map, context_provider_used = self._build_context(worktree_path, objective=prompt)
         context_hash = sha256_json(repository_context)
         _write_artifact(envelope, "repository_map.txt", {"map": repository_map})
-        envelope.event("context_captured", context_hash=context_hash, context_bytes=len(repository_context.encode("utf-8")))
+        _write_artifact(envelope, "context_provider.json", {
+            "requested": self.context_provider.name,
+            "used": context_provider_used,
+            "capabilities": dict(self.context_provider.capabilities()),
+        })
+        envelope.event("context_captured", context_hash=context_hash, context_bytes=len(repository_context.encode("utf-8")), provider=context_provider_used)
         for role in ROLES:
             role_path = run_dir / f"{role}.json"
             # Live edits are reviewed only after final quality evidence is
@@ -350,7 +374,6 @@ class DevelopmentWorkflow:
             # rather than re-running quality checks or the create_pr block.
             return WorkflowResult(run_id, "ready_for_human_review", tuple(results), str(run_dir))
         quality = run_quality_checks(self.manifest, cwd=worktree_path, dry_run=dry_run, policy=self.policy)
-        repairs_applied = False
         implementer_provider = next(
             (item.runtime for item in reversed(results) if item.changed_files),
             "",
@@ -360,8 +383,9 @@ class DevelopmentWorkflow:
                 break
             if not apply_edits:
                 break
-            retry_context, retry_map = build_adaptive_context(worktree_path, objective=prompt + " repair failed quality checks", allowed_paths=self.manifest.allowed_paths, forbidden_paths=self.manifest.forbidden_paths, max_bytes=self.manifest.context_max_bytes)
+            retry_context, _, retry_provider_used = self._build_context(worktree_path, objective=prompt + " repair failed quality checks")
             retry_hash = sha256_json(retry_context)
+            envelope.event("repair_context_captured", context_hash=retry_hash, provider=retry_provider_used, context_bytes=len(retry_context.encode("utf-8")))
             head = subprocess.check_output(["git", "-C", worktree_path, "rev-parse", "HEAD"], text=True).strip()
             repair_task_id = uuid.uuid4().hex
             repair_prompt = f"Role: implementer\nReturn only RepoDev.EditProposal.v1 JSON. Repair these quality failures, using a minimal patch. task_id={repair_task_id}; base_commit={head}; context_hash={retry_hash}.\n\nQuality:\n{json.dumps(quality, sort_keys=True)[:8000]}\n\nContext:\n{retry_context}"
@@ -378,7 +402,6 @@ class DevelopmentWorkflow:
                 _write_artifact(envelope, f"repair_{attempt + 1}.json", result.to_dict())
                 envelope.event("repair_applied", task_id=result.task_id, attempt=attempt + 1, changed_files=list(applied.changed_files))
                 results.append(result)
-                repairs_applied = True
                 implementer_provider = result.runtime
             except (PatchValidationError, ReviewValidationError, UnicodeDecodeError) as exc:
                 envelope.event("repair_rejected", task_id=result.task_id, attempt=attempt + 1, error_type=type(exc).__name__)
