@@ -1,5 +1,4 @@
 import json
-import os
 import sys
 import time
 
@@ -10,6 +9,7 @@ from repo_dev_runtime.runtimes.openclaw import OpenClawRuntime
 from repo_dev_runtime.runtimes.sidecars import DeerFlowRuntime, HermesRuntime
 from repo_dev_runtime.sensors.agent_reach import AgentReachSensor
 from repo_dev_runtime.tools.runner import CommandResult
+from tests.support.processes import pid_is_running
 
 
 def task():
@@ -75,8 +75,5 @@ def test_agent_reach_timeout_terminates_bridge_children(tmp_path):
     while time.monotonic() < deadline and not child_pid_file.exists():
         time.sleep(0.02)
     assert child_pid_file.exists()
-    try:
-        os.kill(int(child_pid_file.read_text(encoding="utf-8")), 0)
-    except OSError:
-        return
-    raise AssertionError("timed-out Agent-Reach bridge left a child process running")
+    child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+    assert not pid_is_running(child_pid), "timed-out Agent-Reach bridge left a child process running"

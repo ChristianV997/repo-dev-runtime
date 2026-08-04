@@ -13,6 +13,7 @@ from repo_dev_runtime.manifest import RepoManifest
 from repo_dev_runtime.tools.runner import run_command
 from repo_dev_runtime.workflow import DevelopmentWorkflow, run_quality_checks
 from repo_dev_runtime.contracts.models import DevResult
+from tests.support.processes import pid_is_running
 
 
 class FakeRuntime:
@@ -133,11 +134,7 @@ def test_runner_timeout_terminates_child_process_tree(tmp_path):
         time.sleep(0.02)
     assert child_pid_file.exists()
     child_pid = int(child_pid_file.read_text(encoding="utf-8"))
-    try:
-        os.kill(child_pid, 0)
-    except OSError:
-        return
-    raise AssertionError("timed-out command left a child process running")
+    assert not pid_is_running(child_pid), "timed-out command left a child process running"
 
 
 def test_workflow_contains_direct_provider_exception_and_persists_failure(tmp_path):
