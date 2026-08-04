@@ -38,7 +38,13 @@ def evaluate_command(command: str, policy: CommandPolicy | None = None) -> Comma
     if not isinstance(command, str) or not command.strip():
         return CommandDecision(False, "empty command")
     active = policy or CommandPolicy()
-    normalized = " ".join(shlex.split(command)).lower()
+    try:
+        normalized = " ".join(shlex.split(command)).lower()
+    except ValueError:
+        # Unbalanced quoting. A fail-closed policy must *deny* input it
+        # cannot parse, not raise out of the decision API and leave the
+        # caller to handle an exception it does not expect.
+        return CommandDecision(False, "command could not be parsed")
     for blocked in active.blocked_substrings:
         if blocked == "git push" and active.allow_branch_publish and _is_generated_push(normalized):
             continue

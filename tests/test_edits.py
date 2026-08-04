@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from repo_dev_runtime.edits import EditProposal, FileEdit, PatchApplier, PatchValidationError
+from repo_dev_runtime.edits import EditProposal, FileEdit, PatchApplier, PatchValidationError, parse_edit_proposal
 
 
 def git_repo(tmp_path: Path) -> tuple[Path, str]:
@@ -101,3 +101,51 @@ def test_context_and_base_are_bound(tmp_path: Path) -> None:
     with pytest.raises(PatchValidationError, match="base"):
         applier.apply(EditProposal.from_dict({"proposal_id": "p", "task_id": "t", "base_commit": "bad",
             "context_hash": "ctx", "summary": "s", "edits": [edit.to_dict()]}))
+
+
+def test_symlink_inside_worktree_cannot_redirect_a_write_past_path_policy(tmp_path):
+    """Regression test: _resolve() checked allowed_paths/forbidden_paths
+    against the *logical* string from the proposal, but wrote to the path
+    after .resolve() had already followed symlinks. A symlink inside the
+    worktree could therefore redirect a write past policy: with
+    `pub -> secrets` present, a proposal editing "pub/creds.txt" passed a
+    check against "pub/..." while actually writing "secrets/creds.txt".
+    The pre-existing escape guard only caught redirection *out of* the
+    worktree, not redirection within it."""
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "creds.txt").write_text("ORIGINAL\n", encoding="utf-8")
+    try:
+        (tmp_path / "pub").symlink_to(tmp_path / "secrets")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are unavailable in this environment")
+
+    applier = PatchApplier(str(tmp_path), allowed_paths=(".",), forbidden_paths=("secrets",))
+
+    with pytest.raises(PatchValidationError, match="forbidden path"):
+        applier._resolve("pub/creds.txt")
+    assert (tmp_path / "secrets" / "creds.txt").read_text(encoding="utf-8") == "ORIGINAL\n"
+
+
+def test_symlink_cannot_escape_allowed_paths_either(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere" / "x.py").write_text("v = 1\n", encoding="utf-8")
+    try:
+        (tmp_path / "src" / "link").symlink_to(tmp_path / "elsewhere")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are unavailable in this environment")
+
+    applier = PatchApplier(str(tmp_path), allowed_paths=("src",))
+
+    with pytest.raises(PatchValidationError, match="outside allowed_paths"):
+        applier._resolve("src/link/x.py")
+
+
+def test_bare_code_fence_raises_the_declared_contract_error(tmp_path):
+    """A bare "```" satisfies both startswith and endswith, so the fence
+    strip raised IndexError — escaping this parser's declared error
+    contract for malformed provider output."""
+    with pytest.raises(PatchValidationError):
+        parse_edit_proposal("```")
+    with pytest.raises(PatchValidationError):
+        parse_edit_proposal("``````")

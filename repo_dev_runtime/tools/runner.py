@@ -37,8 +37,13 @@ def run_command(
 ) -> CommandResult:
     if not command or any(not isinstance(item, str) or not item for item in command):
         raise ValueError("command must be a non-empty sequence of strings")
-    if not 0.001 <= float(timeout_s):
-        raise ValueError("timeout_s must be positive")
+    # Bounded on both ends. Without an upper bound, float("inf") passes this
+    # check, Popen starts the child, and communicate(timeout=inf) then raises
+    # OverflowError - which is not TimeoutExpired, so the existing handler
+    # never runs and the child is left orphaned instead of killed and reaped.
+    # The ceiling matches manifest.check_timeout_s's own limit.
+    if not 0.001 <= float(timeout_s) <= 7_200:
+        raise ValueError("timeout_s must be between 0.001 and 7200 seconds")
     if max_output_bytes < 1:
         raise ValueError("max_output_bytes must be positive")
     if enforce_policy:

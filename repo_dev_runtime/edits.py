@@ -124,7 +124,11 @@ class EditProposal:
 def parse_edit_proposal(output: str) -> EditProposal:
     """Parse a model response only when it is one complete proposal object."""
     text = output.strip()
-    if text.startswith("```") and text.endswith("```"):
+    # A fenced block must actually have a body: bare "```"/"``````" satisfies
+    # both startswith and endswith, and split("\n", 1)[1] would then raise
+    # IndexError - escaping this parser's declared PatchValidationError
+    # contract for malformed provider output.
+    if text.startswith("```") and text.endswith("```") and "\n" in text:
         text = text.split("\n", 1)[1].rsplit("\n", 1)[0]
     try:
         payload = json.loads(text)
@@ -173,12 +177,21 @@ class PatchApplier:
         path = (self.root / relative).resolve()
         if self.root not in path.parents:
             raise PatchValidationError(WORKTREE_ESCAPE_MESSAGE)
+        # Enforce policy on the *resolved* location, not the literal string
+        # the proposal asked for. `.resolve()` follows symlinks, so checking
+        # `relative` lets a symlink inside the worktree redirect a write
+        # past allowed_paths/forbidden_paths: with `pub -> secrets` present,
+        # a proposal editing "pub/creds.txt" passes a check against "pub/..."
+        # while actually writing "secrets/creds.txt". The escape guard above
+        # only catches redirection *out of* the worktree, not within it.
+        effective = path.relative_to(self.root).as_posix()
+        shown = relative if effective == relative else f"{relative} -> {effective}"
         # A manifest's "." scope means the repository root. Auto-detected
         # manifests intentionally use it to permit normal in-worktree edits.
-        if self.allowed_paths and not path_allowed(relative, self.allowed_paths, ()):
-            raise PatchValidationError(f"path is outside allowed_paths: {relative}")
-        if not path_allowed(relative, (), self.forbidden_paths):
-            raise PatchValidationError(f"forbidden path: {relative}")
+        if self.allowed_paths and not path_allowed(effective, self.allowed_paths, ()):
+            raise PatchValidationError(f"path is outside allowed_paths: {shown}")
+        if not path_allowed(effective, (), self.forbidden_paths):
+            raise PatchValidationError(f"forbidden path: {shown}")
         return path
 
     def validate(self, proposal: EditProposal, *, context_hash: str = "") -> None:

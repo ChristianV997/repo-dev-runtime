@@ -37,7 +37,9 @@ _REDACT_BEARER_PATTERN = re.compile(r"(?i)(bearer\s+)[^\s\"']+")
 _REDACT_PLAIN_PATTERN = re.compile(
     r"(?i)\b([A-Za-z0-9_]*(?:key|token|secret|password|credential)[A-Za-z0-9_]*\s*[:=]\s*)(\S+)"
 )
-_SENSITIVE_KEY_NAME = re.compile(r"(?i)(key|token|secret|password|credential)")
+# "authorization" is included; a bare "auth" deliberately is not, because it
+# would also match "author", a legitimate non-secret field this codebase uses.
+_SENSITIVE_KEY_NAME = re.compile(r"(?i)(key|token|secret|password|credential|authorization)")
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,21 @@ def redact_text(value: str) -> str:
     return text
 
 
+def _redact_subtree(value: Any) -> Any:
+    """Replace every scalar under a credential-shaped key with the marker.
+
+    Structure (dict/list shape) is preserved so an artifact stays readable
+    and schema-shaped; only leaf values are removed.
+    """
+    if isinstance(value, Mapping):
+        return {key: _redact_subtree(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_subtree(item) for item in value]
+    if value is None or isinstance(value, bool):
+        return value
+    return "[REDACTED]"
+
+
 def redact_json(value: Any) -> Any:
     """Recursively scrub credential-shaped keys/values from a JSON-like
     structure (dict/list/str), for use on artifacts, telemetry mappings,
@@ -89,8 +106,15 @@ def redact_json(value: Any) -> Any:
     if isinstance(value, Mapping):
         redacted: dict[str, Any] = {}
         for key, item in value.items():
-            if isinstance(key, str) and _SENSITIVE_KEY_NAME.search(key) and isinstance(item, str):
-                redacted[key] = "[REDACTED]"
+            if isinstance(key, str) and _SENSITIVE_KEY_NAME.search(key):
+                # Redact the whole subtree, not just a direct string value.
+                # Also requiring isinstance(item, str) here meant a
+                # recognized credential key whose value was a dict or list
+                # fell through to ordinary recursion, and redact_text
+                # matches nothing on a bare unlabeled secret - so
+                # {"api_key": {"value": "sk-..."}} and {"tokens": ["sk-..."]}
+                # were persisted verbatim.
+                redacted[key] = _redact_subtree(item)
             else:
                 redacted[key] = redact_json(item)
         return redacted
