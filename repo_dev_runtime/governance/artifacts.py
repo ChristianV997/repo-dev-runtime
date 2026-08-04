@@ -57,3 +57,27 @@ class RunEnvelope:
         checksums = {p.name: sha256_file(p) for p in self.root.iterdir() if p.is_file() and p.name != "checksums.json"}
         self.write_json("checksums.json", checksums)
         return envelope
+
+    def verify_checksums(self, *, required: tuple[str, ...] = ()) -> None:
+        """Fail closed when a finalized envelope or required artifact changed.
+
+        Resumption consumes prior artifacts as executable evidence, so merely
+        finding a JSON file is insufficient. Files created after a previous
+        finalize are allowed; callers may verify only the artifacts they will
+        execute, because resumption itself appends to the event log.
+        """
+        checksum_path = self.root / "checksums.json"
+        if not checksum_path.exists():
+            raise ValueError("run envelope checksums are unavailable")
+        payload = json.loads(checksum_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or not all(isinstance(name, str) and isinstance(digest, str) for name, digest in payload.items()):
+            raise ValueError("run envelope checksums are invalid")
+        names = required or tuple(payload)
+        for name in names:
+            if name not in payload:
+                raise ValueError(f"required artifact is not checksum-covered: {name}")
+        for name in names:
+            digest = payload[name]
+            path = self.root / name
+            if not path.is_file() or sha256_file(path) != digest:
+                raise ValueError(f"run envelope artifact checksum mismatch: {name}")

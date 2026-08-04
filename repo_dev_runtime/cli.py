@@ -109,9 +109,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.apply_edits and not args.live:
             print(json.dumps({"status": "blocked", "reason": "apply_edits_requires_live"}, indent=2))
             return 1
-        if args.resume and args.live and args.apply_edits:
-            print(json.dumps({"status": "blocked", "reason": "live_edit_resume_not_supported"}, indent=2))
-            return 1
         artifacts_root = Path(args.artifacts_root).expanduser() if args.artifacts_root else Path.home() / ".repo-dev-runtime" / "runs" / manifest.name
         runtime = RuntimeRouter(default_registry(ollama_enabled=args.enable_ollama if args.live else None, omniroute_enabled=args.enable_omniroute if args.live else None, hermes_enabled=args.enable_sidecars if args.live else None, deerflow_enabled=args.enable_sidecars if args.live else None), policy=policy) if args.live else DryRunRuntime()
         publisher = GitHubPublisher(policy=policy) if args.create_pr else None

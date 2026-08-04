@@ -6,7 +6,7 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 from .contracts.models import DevResult, DevTask
 from .governance.artifacts import RunEnvelope
@@ -24,11 +24,67 @@ from .review import ReviewValidationError, parse_review_verdict
 
 
 ROLES = ("planner", "implementer", "tester", "reviewer", "integrator")
+_REPLAY_ARTIFACT = "patch_replay.jsonl"
+_REPLAY_SCHEMA = "RepoDev.PatchReplayRecord.v1"
 
 
 def _write_artifact(envelope: RunEnvelope, name: str, payload: object) -> None:
     """Persist only redacted run data; execution keeps the original value."""
     envelope.write_json(name, redact_json(payload))
+
+
+def _append_replay_record(envelope: RunEnvelope, proposal: object, *, context_hash: str, applied: object, source: str) -> None:
+    """Persist an exact, replayable proposal only when it is safe to retain.
+
+    Artifacts are normally redacted. A replay ledger needs the original edit
+    text, so credential-shaped proposal content is rejected rather than
+    storing an altered patch which could later be replayed incorrectly.
+    """
+    proposal_payload = proposal.to_dict()  # type: ignore[attr-defined]
+    if redact_json(proposal_payload) != proposal_payload:
+        raise PatchValidationError("proposal contains credential-shaped content and cannot be replayed")
+    record = {
+        "schema": _REPLAY_SCHEMA,
+        "proposal": proposal_payload,
+        "proposal_hash": proposal.proposal_hash,  # type: ignore[attr-defined]
+        "context_hash": context_hash,
+        "changed_files": list(applied.changed_files),  # type: ignore[attr-defined]
+        "after_hashes": dict(applied.after_hashes),  # type: ignore[attr-defined]
+        "source": source,
+    }
+    path = envelope.root / _REPLAY_ARTIFACT
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, sort_keys=True, allow_nan=False) + "\n")
+
+
+def _replay_applied_proposals(envelope: RunEnvelope, *, worktree_path: str, manifest: RepoManifest) -> int:
+    """Reapply only finalized, checksum-covered patch records to a new worktree."""
+    path = envelope.root / _REPLAY_ARTIFACT
+    if not path.exists():
+        return 0
+    envelope.verify_checksums(required=(_REPLAY_ARTIFACT,))
+    records: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise PatchValidationError("patch replay artifact is invalid JSON") from exc
+        if not isinstance(record, dict) or set(record) != {"schema", "proposal", "proposal_hash", "context_hash", "changed_files", "after_hashes", "source"}:
+            raise PatchValidationError("patch replay artifact has invalid fields")
+        if record["schema"] != _REPLAY_SCHEMA or not isinstance(record["context_hash"], str) or not isinstance(record["proposal_hash"], str):
+            raise PatchValidationError("patch replay artifact has invalid metadata")
+        records.append(record)
+    applier = PatchApplier(worktree_path, allowed_paths=manifest.allowed_paths, forbidden_paths=manifest.forbidden_paths)
+    for index, record in enumerate(records, start=1):
+        proposal = parse_edit_proposal(json.dumps(record["proposal"], sort_keys=True))
+        if proposal.proposal_hash != record["proposal_hash"]:
+            raise PatchValidationError("patch replay proposal hash mismatch")
+        applied = applier.apply(proposal, context_hash=record["context_hash"])
+        if list(applied.changed_files) != record["changed_files"] or dict(applied.after_hashes) != record["after_hashes"]:
+            raise PatchValidationError("patch replay result mismatch")
+        envelope.event("proposal_replayed", proposal_hash=applied.proposal_hash, sequence=index, changed_files=list(applied.changed_files))
+    return len(records)
 
 
 @dataclass(frozen=True)
@@ -51,11 +107,6 @@ class DevelopmentWorkflow:
     def run(self, *, prompt: str, base_ref: str = "HEAD", dry_run: bool = True, run_id: str | None = None, resume: bool = False, approved: bool = False, publisher: GitHubPublisher | None = None, create_pr: bool = False, apply_edits: bool = False, max_fix_attempts: int = 0) -> WorkflowResult:
         if apply_edits and dry_run:
             raise ValueError("apply_edits requires a live disposable worktree")
-        if resume and not dry_run and apply_edits:
-            # Applied patches live only in a disposed worktree today. Reusing
-            # cached role results without replaying every validated patch would
-            # make a resumed run's evidence inconsistent with its checkout.
-            raise ValueError("live edit runs cannot resume until durable patch replay is implemented")
         if not 0 <= max_fix_attempts <= 3:
             raise ValueError("max_fix_attempts must be between 0 and 3")
         # A consumer manifest may request network-capable quality commands,
@@ -80,9 +131,14 @@ class DevelopmentWorkflow:
                 worktree = WorktreeManager(self.manifest.root).create(run_id=run_id, base_ref=base_ref)
                 worktree_path = str(worktree.path)
                 envelope.event("worktree_created", path=worktree_path, branch=worktree.branch)
+                if resume and apply_edits:
+                    replayed = _replay_applied_proposals(envelope, worktree_path=worktree_path, manifest=self.manifest)
+                    envelope.event("patch_replay_completed", count=replayed)
             except Exception as exc:
-                _write_artifact(envelope, "promotion.json", {"status": "blocked", "reason": "worktree_creation_failed", "error_type": type(exc).__name__})
+                _write_artifact(envelope, "promotion.json", {"status": "blocked", "reason": "worktree_creation_or_patch_replay_failed", "error_type": type(exc).__name__})
                 envelope.finalize({"schema": "RepoDev.WorkflowRun.v1", "run_id": run_id, "status": "blocked", "repository": self.manifest.name})
+                if worktree is not None:
+                    WorktreeManager(self.manifest.root).remove(worktree)
                 return WorkflowResult(run_id, "blocked", (), str(run_dir))
         repository_context, repository_map = build_adaptive_context(worktree_path, objective=prompt, allowed_paths=self.manifest.allowed_paths, forbidden_paths=self.manifest.forbidden_paths, max_bytes=self.manifest.context_max_bytes)
         context_hash = sha256_json(repository_context)
@@ -122,6 +178,7 @@ class DevelopmentWorkflow:
                     if proposal.task_id != task.task_id:
                         raise PatchValidationError("proposal task_id mismatch")
                     applied = PatchApplier(worktree_path, allowed_paths=self.manifest.allowed_paths, forbidden_paths=self.manifest.forbidden_paths).apply(proposal, context_hash=context_hash)
+                    _append_replay_record(envelope, proposal, context_hash=context_hash, applied=applied, source="implementer")
                     _write_artifact(envelope, "proposal.json", proposal.to_dict())
                     _write_artifact(envelope, "applied_patch.json", {"proposal_hash": applied.proposal_hash, "checkpoint_id": applied.checkpoint_id, "changed_files": list(applied.changed_files), "before_hashes": dict(applied.before_hashes), "after_hashes": dict(applied.after_hashes)})
                     result = DevResult(result.task_id, result.runtime, result.status, result.output, applied.changed_files, result.commit_sha, result.tests, result.telemetry)
@@ -141,6 +198,7 @@ class DevelopmentWorkflow:
                             if candidate_proposal.task_id != repair_task.task_id:
                                 raise PatchValidationError("proposal task_id mismatch")
                             candidate_applied = PatchApplier(worktree_path, allowed_paths=self.manifest.allowed_paths, forbidden_paths=self.manifest.forbidden_paths).apply(candidate_proposal, context_hash=context_hash)
+                            _append_replay_record(envelope, candidate_proposal, context_hash=context_hash, applied=candidate_applied, source="proposal_repair")
                             result = DevResult(candidate.task_id, candidate.runtime, "succeeded", candidate.output, candidate_applied.changed_files, telemetry=candidate.telemetry)
                             _write_artifact(envelope, "proposal.json", candidate_proposal.to_dict())
                             _write_artifact(envelope, "applied_patch.json", {"proposal_hash": candidate_applied.proposal_hash, "checkpoint_id": candidate_applied.checkpoint_id, "changed_files": list(candidate_applied.changed_files), "before_hashes": dict(candidate_applied.before_hashes), "after_hashes": dict(candidate_applied.after_hashes)})
@@ -192,6 +250,7 @@ class DevelopmentWorkflow:
                 if proposal.task_id != task.task_id:
                     raise PatchValidationError("proposal task_id mismatch")
                 applied = PatchApplier(worktree_path, allowed_paths=self.manifest.allowed_paths, forbidden_paths=self.manifest.forbidden_paths).apply(proposal, context_hash=retry_hash)
+                _append_replay_record(envelope, proposal, context_hash=retry_hash, applied=applied, source="quality_repair")
                 result = DevResult(result.task_id, result.runtime, "succeeded", result.output, applied.changed_files, telemetry=result.telemetry)
                 _write_artifact(envelope, f"repair_{attempt + 1}.json", result.to_dict())
                 envelope.event("repair_applied", task_id=result.task_id, attempt=attempt + 1, changed_files=list(applied.changed_files))
