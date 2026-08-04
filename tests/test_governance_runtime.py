@@ -141,6 +141,38 @@ def test_nested_artifact_checksums_round_trip(tmp_path):
     envelope.verify_checksums(required=("nested/result.json",))
 
 
+def test_event_log_is_bounded_against_unbounded_growth(tmp_path, monkeypatch):
+    """Regression test: events.jsonl is append-only and grows across every
+    --resume of the same run, but no cap existed anywhere on its size -
+    unlike every other external-facing size bound in this codebase
+    (TaskStateStore._MAX_STATE_BYTES, Aider's _MAX_INPUT_BYTES,
+    run_command's max_output_bytes). A run pushed past a sane bound must
+    fail closed with a clear error rather than growing the log forever."""
+    from repo_dev_runtime.governance import artifacts as artifacts_module
+
+    monkeypatch.setattr(artifacts_module, "_MAX_EVENTS_BYTES", 200)
+    envelope = RunEnvelope("one", tmp_path / "one")
+
+    with pytest.raises(ValueError, match="event log exceeds maximum size"):
+        for _ in range(50):
+            envelope.event("task_started", task_id="x", detail="padding" * 5)
+
+
+def test_run_envelope_finalize_is_bounded_against_unbounded_growth(tmp_path, monkeypatch):
+    """Regression test: total run-artifact bytes had no cap anywhere,
+    unlike this codebase's other explicit external-facing size bounds.
+    finalize() already walks the whole run directory once to compute
+    checksums, so the bound is enforced there at zero extra I/O cost."""
+    from repo_dev_runtime.governance import artifacts as artifacts_module
+
+    monkeypatch.setattr(artifacts_module, "_MAX_RUN_ARTIFACT_BYTES", 100)
+    envelope = RunEnvelope("one", tmp_path / "one")
+    envelope.write_json("big.json", {"data": "x" * 1000})
+
+    with pytest.raises(ValueError, match="run envelope exceeds maximum size"):
+        envelope.finalize({"status": "ok"})
+
+
 def test_run_envelope_rejects_symlinked_artifacts(tmp_path):
     envelope = RunEnvelope("one", tmp_path / "one")
     envelope.event("started")

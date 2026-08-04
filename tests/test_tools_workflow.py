@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from repo_dev_runtime.governance.artifacts import RunEnvelope
 from repo_dev_runtime.governance.policy import RuntimePolicy
 from repo_dev_runtime.integrations.github import GitHubPublisher
 from repo_dev_runtime.manifest import RepoManifest
@@ -256,6 +257,32 @@ def test_resume_rejects_tampered_role_artifact(tmp_path):
 
     with pytest.raises(ValueError, match="checksum"):
         workflow.run(prompt="inspect original", run_id=first.run_id, resume=True)
+
+
+def test_resume_constructs_run_envelope_only_once(tmp_path, monkeypatch):
+    """Regression test: DevelopmentWorkflow.run() used to construct a
+    RunEnvelope once inside _verify_resume_request and again for the rest
+    of run() itself - two full parses/re-validations of events.jsonl per
+    resume call for no reason, since the second construction only needed
+    the first one's already-verified envelope. A resume call must
+    construct RunEnvelope exactly once."""
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=("src",))
+    run_root = tmp_path / "runs"
+    workflow = DevelopmentWorkflow(manifest=manifest, policy=RuntimePolicy(), runtime=FakeRuntime(), artifacts_root=run_root)
+    first = workflow.run(prompt="inspect original")
+
+    construction_count = {"n": 0}
+    real_init = RunEnvelope.__init__
+
+    def counting_init(self, *args, **kwargs):
+        construction_count["n"] += 1
+        return real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(RunEnvelope, "__init__", counting_init)
+
+    workflow.run(prompt="inspect original", run_id=first.run_id, resume=True)
+
+    assert construction_count["n"] == 1
 
 
 def test_live_edit_resume_blocks_tampered_replay_artifact(tmp_path):
