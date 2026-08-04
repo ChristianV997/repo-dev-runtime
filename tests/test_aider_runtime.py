@@ -14,7 +14,7 @@ from pathlib import Path
 from repo_dev_runtime.contracts.models import DevTask
 from repo_dev_runtime.edits import PatchApplier, parse_edit_proposal
 from repo_dev_runtime.eval.conformance import assert_disabled_runtime_contract, assert_no_forbidden_capabilities
-from repo_dev_runtime.runtimes.aider import AiderRuntime, _aider_objective
+from repo_dev_runtime.runtimes.aider import AiderRuntime, _aider_objective, _snapshot
 
 
 def _git(root: Path, *args: str) -> str:
@@ -114,6 +114,31 @@ def test_aider_ignores_hidden_artifacts_created_in_its_sandbox(tmp_path):
     assert result.status == "failed"
     assert result.error_type == "no_edits"
     assert not (root / ".aider.chat.history.md").exists()
+
+
+def test_aider_snapshot_prunes_generated_trees_and_bounds_file_reads(tmp_path):
+    root, _ = _repository(tmp_path)
+    (root / "node_modules" / "pkg").mkdir(parents=True)
+    (root / "node_modules" / "pkg" / "generated.py").write_text("generated", encoding="utf-8")
+    (root / "dist").mkdir()
+    (root / "dist" / "bundle.py").write_text("bundle", encoding="utf-8")
+    (root / "large.py").write_bytes(b"x" * 1_000_001)
+
+    snapshot = _snapshot(root, (".",), max_files=100, max_bytes=2_000_000)
+
+    assert "calc.py" in snapshot
+    assert "node_modules/pkg/generated.py" not in snapshot
+    assert "dist/bundle.py" not in snapshot
+    assert "large.py" not in snapshot
+
+
+def test_aider_snapshot_uses_case_insensitive_scope(tmp_path):
+    root, _ = _repository(tmp_path)
+    (root / "src").mkdir()
+    (root / "src" / "app.py").write_text("value = 1\n", encoding="utf-8")
+    snapshot = _snapshot(root, ("SRC",), max_files=100, max_bytes=2_000_000)
+    assert "src/app.py" in snapshot
+    assert "calc.py" not in snapshot
 
 
 def test_aider_timeout_terminates_the_provider_process_tree(tmp_path):
