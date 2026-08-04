@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,7 +28,10 @@ class RunEnvelope:
     events: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        self.root = Path(self.root).expanduser().resolve()
         event_path = self.root / "events.jsonl"
+        if event_path.is_symlink():
+            raise ValueError("run event log must not be a symlink")
         if not self.events and event_path.exists():
             for line in event_path.read_text(encoding="utf-8").splitlines():
                 if line.strip():
@@ -46,6 +50,10 @@ class RunEnvelope:
 
     def event(self, name: str, **data: Any) -> None:
         safe_data = redact_json(data)
+        self.root.mkdir(parents=True, exist_ok=True)
+        event_path = self.root / "events.jsonl"
+        if event_path.is_symlink():
+            raise ValueError("run event log must not be a symlink")
         sequence = len(self.events)
         event = {
             "sequence": sequence,
@@ -55,8 +63,7 @@ class RunEnvelope:
         }
         event["event_hash"] = _event_hash(sequence, name, safe_data)
         self.events.append(event)
-        self.root.mkdir(parents=True, exist_ok=True)
-        with (self.root / "events.jsonl").open("a", encoding="utf-8") as stream:
+        with event_path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(event, sort_keys=True, allow_nan=False) + "\n")
 
     def write_json(self, name: str, payload: Any) -> Path:
@@ -73,18 +80,34 @@ class RunEnvelope:
         relative = PurePosixPath(name)
         if relative.is_absolute() or ".." in relative.parts or "." in relative.parts or str(relative) != name:
             raise ValueError("artifact name must be a canonical relative path")
-        path = (self.root / name).resolve()
+        candidate = self.root / name
+        current = candidate
+        while current != self.root:
+            if current.is_symlink():
+                raise ValueError("run artifact path must not contain symlinks")
+            current = current.parent
+        path = candidate.resolve()
         if path != self.root and self.root not in path.parents:
             raise ValueError("artifact path escapes run envelope")
         return path
 
     def finalize(self, payload: dict[str, Any]) -> Path:
         envelope = self.write_json("manifest.json", payload)
-        checksums = {
-            p.relative_to(self.root).as_posix(): sha256_file(p)
-            for p in self.root.rglob("*")
-            if p.is_file() and p.relative_to(self.root).as_posix() != "checksums.json"
-        }
+        checksums: dict[str, str] = {}
+        for current, directories, filenames in os.walk(self.root, topdown=True, followlinks=False):
+            current_path = Path(current)
+            for directory in directories:
+                if (current_path / directory).is_symlink():
+                    raise ValueError("run envelope cannot contain symlinks")
+            for filename in filenames:
+                path = current_path / filename
+                if path.is_symlink():
+                    raise ValueError("run envelope cannot contain symlinks")
+                if not path.is_file():
+                    continue
+                name = path.relative_to(self.root).as_posix()
+                if name != "checksums.json":
+                    checksums[name] = sha256_file(path)
         self.write_json("checksums.json", checksums)
         return envelope
 
@@ -97,7 +120,7 @@ class RunEnvelope:
         execute, because resumption itself appends to the event log.
         """
         checksum_path = self.root / "checksums.json"
-        if not checksum_path.exists():
+        if checksum_path.is_symlink() or not checksum_path.exists():
             raise ValueError("run envelope checksums are unavailable")
         payload = json.loads(checksum_path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict) or not all(isinstance(name, str) and isinstance(digest, str) for name, digest in payload.items()):
