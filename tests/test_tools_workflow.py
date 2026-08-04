@@ -235,6 +235,29 @@ def test_resume_rejects_tampered_promotion_state(tmp_path):
         workflow.run(prompt="inspect original", run_id=first.run_id, resume=True)
 
 
+def test_resume_rejects_tampered_role_artifact(tmp_path):
+    """Regression test: _verify_resume_request's `required` checksum list
+    was built from bare ROLES names ("planner", "implementer", ...), but
+    role artifacts are actually written as "{role}.json" (e.g.
+    "planner.json"). run_dir / "planner" never exists, so no role file was
+    ever added to `required` and its checksum was silently never checked -
+    only promotion.json (whose name happens to be a literal string) was
+    actually protected. Tampering with a role's cached output and
+    resuming must be rejected the same way tampering with promotion.json
+    already is."""
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=("src",))
+    run_root = tmp_path / "runs"
+    workflow = DevelopmentWorkflow(manifest=manifest, policy=RuntimePolicy(), runtime=FakeRuntime(), artifacts_root=run_root)
+    first = workflow.run(prompt="inspect original")
+    planner_path = run_root / first.run_id / "planner.json"
+    planner = json.loads(planner_path.read_text(encoding="utf-8"))
+    planner["output"] = "tampered"
+    planner_path.write_text(json.dumps(planner), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="checksum"):
+        workflow.run(prompt="inspect original", run_id=first.run_id, resume=True)
+
+
 def test_live_edit_resume_blocks_tampered_replay_artifact(tmp_path):
     subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)

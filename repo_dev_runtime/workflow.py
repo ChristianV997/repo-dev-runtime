@@ -75,7 +75,7 @@ def _verify_resume_request(run_id: str, run_dir: Path, expected_hash: str) -> No
     """Require a checksum-covered request identity before resuming."""
     envelope = RunEnvelope(run_id, run_dir)
     required = [_REQUEST_ARTIFACT]
-    for name in (*ROLES, "promotion.json"):
+    for name in (*(f"{role}.json" for role in ROLES), "promotion.json"):
         if (run_dir / name).exists():
             required.append(name)
     envelope.verify_checksums(required=tuple(required))
