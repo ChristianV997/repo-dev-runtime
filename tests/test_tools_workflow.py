@@ -5,6 +5,7 @@ import re
 import pytest
 
 from repo_dev_runtime.governance.policy import RuntimePolicy
+from repo_dev_runtime.integrations.github import GitHubPublisher
 from repo_dev_runtime.manifest import RepoManifest
 from repo_dev_runtime.tools.runner import run_command
 from repo_dev_runtime.workflow import DevelopmentWorkflow, run_quality_checks
@@ -168,3 +169,36 @@ def test_malformed_proposal_uses_bounded_repair(tmp_path):
     assert "proposal_rejected" in events and "proposal_repaired" in events
     assert (tmp_path / "src" / "app.py").read_text() == "value = 1\n"
     assert json.loads((tmp_path / "runs" / result.run_id / "applied_patch.json").read_text())["changed_files"] == ["src/app.py"]
+
+
+def test_create_pr_workflow_calls_publisher_with_correct_signature(tmp_path, monkeypatch):
+    """Regression test: GitHubPublisher.create_from_worktree requires
+    allowed_paths/forbidden_paths (a real policy gate on which changed paths
+    may be published), but the workflow's call site previously omitted both
+    - a live --create-pr run would raise
+    'TypeError: create_from_worktree() missing 2 required keyword-only
+    arguments' immediately, with zero test coverage catching it. Network
+    calls are monkeypatched out (publish_branch/create_pull_request); the
+    point of this test is the call signature and path-policy enforcement
+    actually reaching the real GitHubPublisher method, not the network."""
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "initial"], check=True)
+
+    monkeypatch.setattr(GitHubPublisher, "publish_branch", lambda self, *, repository, branch, base="main": {"branch": branch, "base": base, "pushed": True})
+    monkeypatch.setattr(GitHubPublisher, "create_pull_request", lambda self, *, repository, branch, base, title, body: {"url": "https://example.invalid/pr/1", "number": 1, "branch": branch, "base": base})
+
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=("src",), test_command=("git", "status", "--short"), pull_request_creation=True)
+    policy = RuntimePolicy(allow_pr_creation=True, allow_branch_publish=True)
+    publisher = GitHubPublisher(policy=policy, token="fake-token")
+    result = DevelopmentWorkflow(manifest=manifest, policy=policy, runtime=ProposalRuntime(), artifacts_root=tmp_path / "runs").run(
+        prompt="change value", base_ref="main", dry_run=False, apply_edits=True, create_pr=True, publisher=publisher,
+    )
+    assert result.status == "ready_for_human_review"
+    promotion = json.loads((tmp_path / "runs" / result.run_id / "promotion.json").read_text())
+    assert promotion["status"] == "pr_created"
+    assert promotion["pull_request"]["url"] == "https://example.invalid/pr/1"

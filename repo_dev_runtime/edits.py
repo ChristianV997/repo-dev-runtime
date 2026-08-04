@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
-from .contracts.models import canonical_json, now_iso, sha256_json
+from .contracts.models import now_iso, sha256_json
 
 SCHEMA = "RepoDev.EditProposal.v1"
 FORMATS = {"search_replace", "whole_file"}

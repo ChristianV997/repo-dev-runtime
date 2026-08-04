@@ -19,11 +19,17 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install test runner
-        run: python -m pip install --upgrade pytest
+        run: python -m pip install --upgrade pytest ruff
       - name: Run tests
         run: python -m pytest -q
+      - name: Lint (ruff)
+        # Scoped to F (pyflakes: unused imports/vars, undefined names) and
+        # E9 (syntax errors) — see [tool.ruff.lint] in pyproject.toml for why
+        # ruff's broader default rule set (import sorting, typing
+        # modernization) isn't gated on here.
+        run: python -m ruff check repo_dev_runtime tests scripts
       - name: Compile sources
-        run: python -m compileall -q repo_dev_runtime tests
+        run: python -m compileall -q repo_dev_runtime tests scripts
       - name: Validate provenance inventory
         run: python -m json.tool provenance/source_inventory.json > /dev/null
       - name: Fixture benchmark regression gate

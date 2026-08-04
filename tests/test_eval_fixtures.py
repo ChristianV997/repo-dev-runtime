@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import subprocess
 
-import pytest
 
 from repo_dev_runtime.eval.fakes import FakeCodingProvider, default_fake_provider_factory
 from repo_dev_runtime.eval.fixtures import FIXTURE_CASES, build_fixture_repository
@@ -71,7 +70,6 @@ def test_source_checkout_immutable_across_fixture_run(tmp_path):
 
 def test_worktree_containment(tmp_path):
     case = FIXTURE_CASES[0]
-    captured = {}
 
     def capturing_provider(c):
         provider = FakeCodingProvider(c.provider_turns)

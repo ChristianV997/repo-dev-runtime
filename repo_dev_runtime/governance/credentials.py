@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 # Env vars always safe to forward: none of these can carry a secret.

@@ -8,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 from repo_dev_runtime.eval.fixtures import FIXTURE_CASES
 

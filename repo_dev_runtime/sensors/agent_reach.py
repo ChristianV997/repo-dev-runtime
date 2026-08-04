@@ -6,7 +6,6 @@ import os
 import shlex
 import shutil
 import subprocess
-import uuid
 from typing import Mapping, Sequence
 
 from ..contracts.models import RuntimeHealth, SensorRequest, SensorResult
