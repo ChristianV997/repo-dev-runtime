@@ -163,6 +163,30 @@ def test_live_edit_resume_replays_checksum_validated_patches(tmp_path):
     assert deleted_branch.stdout.strip() == ""
 
 
+def test_resume_rejects_changed_request_identity(tmp_path):
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=("src",))
+    run_root = tmp_path / "runs"
+    workflow = DevelopmentWorkflow(manifest=manifest, policy=RuntimePolicy(), runtime=FakeRuntime(), artifacts_root=run_root)
+    first = workflow.run(prompt="inspect original")
+
+    with pytest.raises(ValueError, match="does not match"):
+        workflow.run(prompt="inspect changed", run_id=first.run_id, resume=True)
+
+
+def test_resume_rejects_tampered_request_identity(tmp_path):
+    manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=("src",))
+    run_root = tmp_path / "runs"
+    workflow = DevelopmentWorkflow(manifest=manifest, policy=RuntimePolicy(), runtime=FakeRuntime(), artifacts_root=run_root)
+    first = workflow.run(prompt="inspect original")
+    request_path = run_root / first.run_id / "request.json"
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    request["request_hash"] = "0" * 64
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="checksum"):
+        workflow.run(prompt="inspect original", run_id=first.run_id, resume=True)
+
+
 def test_live_edit_resume_blocks_tampered_replay_artifact(tmp_path):
     subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
