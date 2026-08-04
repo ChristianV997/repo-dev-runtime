@@ -14,7 +14,7 @@ approve/reject mapping heuristic (PR-Agent has no native approve/reject
 signal — this bridge infers one).
 
 Protocol:
-  stdin:  one JSON object: {"request_id", "objective", "diff"}
+  stdin:  one JSON object: {"request_id", "objective", "diff", "base_files"}
           (exactly what PRAgentReviewAdapter.review() sends).
   stdout: on success, one RepoDev.ReviewVerdict.v1 JSON object.
   exit:   0 on success; non-zero with a stderr message on any failure.
@@ -32,12 +32,11 @@ Environment:
                             model name (litellm routes by name + api_base,
                             not by contacting the real provider first).
 
-Known limitation: this bridge receives only a diff, not the original
-repository, so it applies the diff against a minimal one-file scaffold
-repo. Diffs that only add new files apply cleanly; diffs that modify
-existing files require matching base content that isn't available here
-and will cause `git apply` to fail — surfaced as a clear stderr error and
-a non-zero exit, never a fabricated review.
+The optional ``base_files`` mapping supplies only baseline contents for
+files modified by the diff. The bridge materializes those contents in its
+scratch repository, so it can review ordinary modified-file patches without
+receiving a consumer checkout path. Missing baseline content still makes
+``git apply`` fail closed rather than fabricating a verdict.
 """
 from __future__ import annotations
 
@@ -48,6 +47,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from pathlib import PurePosixPath
 
 try:
     import pr_agent.git_providers as _git_providers
@@ -135,7 +135,17 @@ def _run(cmd: list[str], cwd: Path) -> None:
         raise BridgeError(f"command failed: {' '.join(cmd)}\n{result.stderr}")
 
 
-def _build_repo(tmp_path: Path, diff: str) -> tuple[Path, str]:
+def _safe_base_path(repo: Path, relative: str) -> Path:
+    parsed = PurePosixPath(relative)
+    if not relative or not parsed.parts or parsed.is_absolute() or ".." in parsed.parts or "\\" in relative or str(parsed) != relative:
+        raise BridgeError("base_files contains an unsafe path")
+    path = (repo / relative).resolve()
+    if repo not in path.parents:
+        raise BridgeError("base_files path escapes the scratch repository")
+    return path
+
+
+def _build_repo(tmp_path: Path, diff: str, base_files: dict[str, str]) -> tuple[Path, str]:
     """Create a real, throwaway git repo with a `main` branch and a
     `review` branch that applies `diff`, for PR-Agent's LocalGitProvider
     to diff. See the module docstring's "Known limitation" note."""
@@ -145,7 +155,13 @@ def _build_repo(tmp_path: Path, diff: str) -> tuple[Path, str]:
     _run(["git", "config", "user.email", "bridge@example.com"], repo)
     _run(["git", "config", "user.name", "pr-agent-bridge"], repo)
     (repo / "README.md").write_text("placeholder\n", encoding="utf-8")
-    _run(["git", "add", "README.md"], repo)
+    for relative, content in base_files.items():
+        if not isinstance(relative, str) or not isinstance(content, str):
+            raise BridgeError("base_files must map paths to text")
+        target = _safe_base_path(repo, relative)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    _run(["git", "add", "-A"], repo)
     _run(["git", "commit", "-q", "-m", "base"], repo)
     _run(["git", "branch", "-m", "main"], repo)
     _run(["git", "checkout", "-q", "-b", "review"], repo)
@@ -234,6 +250,10 @@ def main() -> int:
         print(f"invalid request JSON on stdin: {exc}", file=sys.stderr)
         return 2
     diff = str(payload.get("diff", ""))
+    base_files = payload.get("base_files", {})
+    if not isinstance(base_files, dict):
+        print("base_files must be an object", file=sys.stderr)
+        return 2
 
     api_base = os.environ.get("PR_AGENT_OPENAI_API_BASE")
     if not api_base:
@@ -245,7 +265,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="pr-agent-bridge-") as tmp:
         tmp_path = Path(tmp)
         try:
-            repo, target_branch = _build_repo(tmp_path, diff)
+            repo, target_branch = _build_repo(tmp_path, diff, base_files)
         except BridgeError as exc:
             print(str(exc), file=sys.stderr)
             return 1
