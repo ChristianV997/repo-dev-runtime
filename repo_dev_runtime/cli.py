@@ -132,6 +132,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.enable_pr_agent and not args.approve_external_review:
             print(json.dumps({"status": "blocked", "reason": "pr_agent_requires_explicit_approval"}, indent=2))
             return 1
+        if args.enable_aider and args.apply_edits and not (
+            args.enable_ollama or args.enable_omniroute or args.enable_sidecars or args.enable_pr_agent
+        ):
+            print(json.dumps({"status": "blocked", "reason": "aider_requires_independent_reviewer_provider"}, indent=2))
+            return 1
         if args.enable_pr_agent:
             try:
                 policy.authorize("pr_agent_review", approved=True)

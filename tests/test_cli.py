@@ -67,6 +67,16 @@ def test_run_pr_agent_requires_live_edits_and_explicit_approval(tmp_path, capsys
     assert payload["reason"] == "pr_agent_requires_explicit_approval"
 
 
+def test_live_aider_edits_require_an_independent_reviewer_provider(tmp_path, capsys):
+    code, payload = _run_cli([
+        "run", str(tmp_path), "--prompt", "inspect", "--live", "--enable-aider", "--apply-edits",
+        "--artifacts-root", str(tmp_path / "artifacts"),
+    ], capsys)
+
+    assert code == 1
+    assert payload["reason"] == "aider_requires_independent_reviewer_provider"
+
+
 def test_run_handoff_requires_explicit_vault(tmp_path, capsys):
     code, payload = _run_cli([
         "run", str(tmp_path), "--prompt", "inspect", "--write-handoff",
