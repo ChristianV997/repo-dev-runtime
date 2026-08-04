@@ -76,6 +76,43 @@ def test_event_log_continues_after_resume(tmp_path):
     assert json.loads(lines[-1])["sequence"] == 1
 
 
+def test_event_data_is_redacted_before_persistence(tmp_path):
+    envelope = RunEnvelope("one", tmp_path / "one")
+
+    envelope.event("provider_finished", access_token="event-secret")
+
+    persisted = (tmp_path / "one" / "events.jsonl").read_text(encoding="utf-8")
+    assert "event-secret" not in persisted
+    assert "[REDACTED]" in persisted
+
+
+def test_tampered_event_log_is_rejected_on_load(tmp_path):
+    envelope = RunEnvelope("one", tmp_path / "one")
+    envelope.event("task_started", task_id="x")
+    event_path = tmp_path / "one" / "events.jsonl"
+    event_path.write_text(event_path.read_text(encoding="utf-8").replace('"task_started"', '"task_finished"'), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="hash mismatch"):
+        RunEnvelope("one", tmp_path / "one")
+
+
+def test_artifact_names_cannot_escape_the_run_envelope(tmp_path):
+    envelope = RunEnvelope("one", tmp_path / "one")
+
+    with pytest.raises(ValueError):
+        envelope.write_json("../outside.json", {"safe": True})
+    with pytest.raises(ValueError):
+        envelope.write_json("C:\\outside.json", {"safe": True})
+
+
+def test_nested_artifact_checksums_round_trip(tmp_path):
+    envelope = RunEnvelope("one", tmp_path / "one")
+    envelope.write_json("nested/result.json", {"status": "ok"})
+    envelope.finalize({"status": "ok"})
+
+    envelope.verify_checksums(required=("nested/result.json",))
+
+
 def test_diagnostics_are_bounded():
     result = actionable_output("\n".join(f"line-{i}" for i in range(100)), max_lines=3, max_chars=100)
     assert result.splitlines() == ["line-97", "line-98", "line-99"]

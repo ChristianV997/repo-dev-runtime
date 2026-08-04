@@ -26,6 +26,8 @@ from .review import ReviewValidationError, parse_review_verdict
 ROLES = ("planner", "implementer", "tester", "reviewer", "integrator")
 _REPLAY_ARTIFACT = "patch_replay.jsonl"
 _REPLAY_SCHEMA = "RepoDev.PatchReplayRecord.v1"
+_REQUEST_ARTIFACT = "request.json"
+_REQUEST_SCHEMA = "RepoDev.WorkflowRequest.v1"
 
 
 def _write_artifact(envelope: RunEnvelope, name: str, payload: object) -> None:
@@ -56,6 +58,29 @@ def _append_replay_record(envelope: RunEnvelope, proposal: object, *, context_ha
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(record, sort_keys=True, allow_nan=False) + "\n")
+
+
+def _request_hash(*, prompt: str, base_ref: str, dry_run: bool, apply_edits: bool, max_fix_attempts: int, manifest: RepoManifest) -> str:
+    return sha256_json({
+        "prompt": prompt,
+        "base_ref": base_ref,
+        "dry_run": dry_run,
+        "apply_edits": apply_edits,
+        "max_fix_attempts": max_fix_attempts,
+        "manifest": manifest.to_dict(),
+    })
+
+
+def _verify_resume_request(run_id: str, run_dir: Path, expected_hash: str) -> None:
+    """Require a checksum-covered request identity before resuming."""
+    envelope = RunEnvelope(run_id, run_dir)
+    envelope.verify_checksums(required=(_REQUEST_ARTIFACT,))
+    path = run_dir / _REQUEST_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("schema") != _REQUEST_SCHEMA:
+        raise ValueError("run request artifact is invalid")
+    if payload.get("request_hash") != expected_hash:
+        raise ValueError("resume request does not match the original run")
 
 
 def _replay_applied_proposals(envelope: RunEnvelope, *, worktree_path: str, manifest: RepoManifest) -> int:
@@ -120,6 +145,16 @@ class DevelopmentWorkflow:
             raise FileNotFoundError(f"run does not exist: {run_id}")
         if not resume and run_dir.exists():
             raise FileExistsError(f"run already exists: {run_id}")
+        request_hash = _request_hash(
+            prompt=prompt,
+            base_ref=base_ref,
+            dry_run=dry_run,
+            apply_edits=apply_edits,
+            max_fix_attempts=max_fix_attempts,
+            manifest=self.manifest,
+        )
+        if resume:
+            _verify_resume_request(run_id, run_dir, request_hash)
         if resume and create_pr:
             # A resumed run with create_pr=True that already reached a
             # success terminal state (promotion.json's "status", not
@@ -150,6 +185,11 @@ class DevelopmentWorkflow:
                     )
                     return WorkflowResult(run_id, "ready_for_human_review", cached_results, str(run_dir))
         envelope = RunEnvelope(run_id, run_dir)
+        if not resume:
+            _write_artifact(envelope, _REQUEST_ARTIFACT, {
+                "schema": _REQUEST_SCHEMA,
+                "request_hash": request_hash,
+            })
         envelope.event("workflow_started", repository=self.manifest.name, dry_run=dry_run, resume=resume)
         results: list[DevResult] = []
         previous: list[str] = []

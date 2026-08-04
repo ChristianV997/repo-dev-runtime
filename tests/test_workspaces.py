@@ -40,6 +40,33 @@ def test_worktree_reuses_generated_branch_for_resume(tmp_path):
     manager.remove(second)
 
 
+def test_worktree_run_id_rejects_path_and_branch_injection(tmp_path):
+    _git(tmp_path, "init", "-b", "main")
+    (tmp_path / "README.md").write_text("fixture\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial")
+    manager = WorktreeManager(tmp_path, tmp_path.parent / "worktrees-safe-id")
+
+    with pytest.raises(ValueError, match="run_id"):
+        manager.create(run_id="../outside")
+    with pytest.raises(ValueError, match="run_id"):
+        manager.create(run_id="bad id")
+
+
+def test_worktree_remove_rejects_paths_outside_configured_root(tmp_path):
+    _git(tmp_path, "init", "-b", "main")
+    (tmp_path / "README.md").write_text("fixture\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial")
+    manager = WorktreeManager(tmp_path, tmp_path.parent / "worktrees-safe-remove")
+    worktree = manager.create(run_id="safe-remove")
+    foreign = type(worktree)(tmp_path.parent / "foreign", worktree.branch, worktree.base_ref)
+
+    with pytest.raises(ValueError, match="outside"):
+        manager.remove(foreign)
+    manager.remove(worktree)
+
+
 def test_completed_worktree_branch_can_be_removed(tmp_path):
     _git(tmp_path, "init", "-b", "main")
     (tmp_path / "README.md").write_text("fixture\n", encoding="utf-8")

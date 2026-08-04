@@ -6,7 +6,10 @@ import json
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any
+
+from .credentials import redact_json
 
 
 def sha256_file(path: Path) -> str:
@@ -29,18 +32,28 @@ class RunEnvelope:
             for line in event_path.read_text(encoding="utf-8").splitlines():
                 if line.strip():
                     self.events.append(json.loads(line))
+        self._validate_events()
+
+    def _validate_events(self) -> None:
+        for sequence, event in enumerate(self.events):
+            if not isinstance(event, dict) or event.get("sequence") != sequence:
+                raise ValueError("run event log sequence is invalid")
+            if not isinstance(event.get("event"), str) or not isinstance(event.get("data"), dict):
+                raise ValueError("run event log shape is invalid")
+            expected_hash = _event_hash(sequence, event["event"], event["data"])
+            if event.get("event_hash") != expected_hash:
+                raise ValueError("run event log hash mismatch")
 
     def event(self, name: str, **data: Any) -> None:
+        safe_data = redact_json(data)
         sequence = len(self.events)
         event = {
             "sequence": sequence,
             "event": name,
-            "data": data,
+            "data": safe_data,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        event["event_hash"] = hashlib.sha256(
-            json.dumps({"sequence": sequence, "event": name, "data": data}, sort_keys=True, allow_nan=False).encode("utf-8")
-        ).hexdigest()
+        event["event_hash"] = _event_hash(sequence, name, safe_data)
         self.events.append(event)
         self.root.mkdir(parents=True, exist_ok=True)
         with (self.root / "events.jsonl").open("a", encoding="utf-8") as stream:
@@ -48,13 +61,30 @@ class RunEnvelope:
 
     def write_json(self, name: str, payload: Any) -> Path:
         self.root.mkdir(parents=True, exist_ok=True)
-        path = self.root / name
+        path = self._artifact_path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
+        return path
+
+    def _artifact_path(self, name: str) -> Path:
+        """Resolve an artifact name without permitting envelope escape."""
+        if not isinstance(name, str) or not name or "\\" in name:
+            raise ValueError("artifact name must be a non-empty relative POSIX path")
+        relative = PurePosixPath(name)
+        if relative.is_absolute() or ".." in relative.parts or "." in relative.parts or str(relative) != name:
+            raise ValueError("artifact name must be a canonical relative path")
+        path = (self.root / name).resolve()
+        if path != self.root and self.root not in path.parents:
+            raise ValueError("artifact path escapes run envelope")
         return path
 
     def finalize(self, payload: dict[str, Any]) -> Path:
         envelope = self.write_json("manifest.json", payload)
-        checksums = {p.name: sha256_file(p) for p in self.root.iterdir() if p.is_file() and p.name != "checksums.json"}
+        checksums = {
+            p.relative_to(self.root).as_posix(): sha256_file(p)
+            for p in self.root.rglob("*")
+            if p.is_file() and p.relative_to(self.root).as_posix() != "checksums.json"
+        }
         self.write_json("checksums.json", checksums)
         return envelope
 
@@ -78,6 +108,12 @@ class RunEnvelope:
                 raise ValueError(f"required artifact is not checksum-covered: {name}")
         for name in names:
             digest = payload[name]
-            path = self.root / name
+            path = self._artifact_path(name)
             if not path.is_file() or sha256_file(path) != digest:
                 raise ValueError(f"run envelope artifact checksum mismatch: {name}")
+
+
+def _event_hash(sequence: int, name: str, data: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps({"sequence": sequence, "event": name, "data": data}, sort_keys=True, allow_nan=False).encode("utf-8")
+    ).hexdigest()
