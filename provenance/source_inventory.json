@@ -89,9 +89,9 @@
       "source_repository": "The-PRAgent/pr-agent",
       "source_url": "https://github.com/The-PRAgent/pr-agent",
       "license": "MIT",
-      "status": "reference",
+      "status": "reviewed",
       "capability": "structured, context-aware review analysis, later evaluated as an independent bounded reviewer adapter for the provider-evaluation layer",
-      "adaptation": "implemented a machine-readable reviewer verdict schema (RepoDev.ReviewVerdict.v1) that gates promotion; later implemented a disabled-by-default subprocess bridge (repo_dev_runtime/eval/pr_agent.py) plus a deterministic FakePRAgentAdapter for tests/benchmarks; the exact live PR-Agent CLI/API contract is not assumed or guessed; no PR-Agent source vendored; the adapter has no method to apply edits, merge, push, or create a pull request"
+      "adaptation": "implemented a machine-readable reviewer verdict schema (RepoDev.ReviewVerdict.v1) that gates promotion; a disabled-by-default subprocess bridge (repo_dev_runtime/eval/pr_agent.py) plus a deterministic FakePRAgentAdapter for tests/benchmarks; a real, operator-installed translation bridge (scripts/pr_agent_bridge.py, requires `pip install pr-agent GitPython` separately) drives the actual pr-agent package's LocalGitProvider review flow against a configurable OpenAI-compatible endpoint and maps its native review fields into RepoDev.ReviewVerdict.v1 (see docs/pr-agent-real-integration.md); no PR-Agent source vendored; the adapter has no method to apply edits, merge, push, or create a pull request"
     },
     {
       "source_repository": "cline/cline",

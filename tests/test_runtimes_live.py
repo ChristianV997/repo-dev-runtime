@@ -176,6 +176,58 @@ def test_hermes_execute_classifies_http_error_default_request_path():
     assert result.error_type == "HTTPError"
 
 
+def test_hermes_health_reachable_against_real_server():
+    with stub_server({("GET", "/v1/models"): json_response(200, {"data": []})}) as server:
+        runtime = HermesRuntime(base_url=server.base_url, enabled=True)
+        health = runtime.health()
+    assert health.reachable is True
+
+
+def test_hermes_health_unreachable_when_nothing_listening():
+    runtime = HermesRuntime(base_url=f"http://127.0.0.1:{unused_port()}", enabled=True)
+    health = runtime.health()
+    assert health.reachable is False
+    assert health.detail == "URLError"
+
+
+def test_hermes_execute_classifies_malformed_json_default_request_path():
+    with stub_server({("POST", "/v1/chat/completions"): raw_response(200, b"not json")}) as server:
+        runtime = HermesRuntime(base_url=server.base_url, enabled=True)
+        result = runtime.execute(_task())
+    assert result.status == "failed"
+    assert result.error_type == "JSONDecodeError"
+
+
+def test_hermes_execute_classifies_oversized_response_as_truncated_json():
+    # Unlike Ollama/OpenAI-compatible, HermesRuntime's `_post_json` has no
+    # explicit max_output_bytes check — it reads a hardcoded 2,000,001-byte
+    # cap and whatever gets truncated mid-string fails JSON parsing. This is
+    # a real, undocumented behavioral difference from the other adapters
+    # (worth knowing, not fixed here), so this test asserts the real
+    # observed classification rather than an explicit "oversized" ValueError.
+    hermes_oversized_body = b'{"choices":[{"message":{"content":"' + b"a" * 2_100_000 + b'"}}]}'
+    with stub_server({("POST", "/v1/chat/completions"): raw_response(200, hermes_oversized_body)}) as server:
+        runtime = HermesRuntime(base_url=server.base_url, enabled=True)
+        result = runtime.execute(_task())
+    assert result.status == "failed"
+    assert result.error_type == "JSONDecodeError"
+
+
+def test_hermes_execute_classifies_timeout_default_request_path():
+    with stub_server({("POST", "/v1/chat/completions"): json_response(200, {"choices": [{"message": {"content": "late"}}]}, delay=0.5)}) as server:
+        runtime = HermesRuntime(base_url=server.base_url, enabled=True)
+        result = runtime.execute(_task(timeout_s=0.05))
+    assert result.status == "failed"
+    assert result.error_type in {"TimeoutError", "timeout"}
+
+
+def test_hermes_execute_classifies_connection_refused_default_request_path():
+    runtime = HermesRuntime(base_url=f"http://127.0.0.1:{unused_port()}", enabled=True)
+    result = runtime.execute(_task())
+    assert result.status == "failed"
+    assert result.error_type == "URLError"
+
+
 # ---------------------------------------------------------------------------
 # DeerFlow (SSE)
 # ---------------------------------------------------------------------------

@@ -120,6 +120,35 @@ class DevelopmentWorkflow:
             raise FileNotFoundError(f"run does not exist: {run_id}")
         if not resume and run_dir.exists():
             raise FileExistsError(f"run already exists: {run_id}")
+        if resume and create_pr:
+            # A resumed run with create_pr=True that already reached a
+            # success terminal state (promotion.json's "status", not
+            # WorkflowResult.status, which is always "ready_for_human_review"
+            # on success) must not call create_from_worktree again - the
+            # prior worktree/branch may already be deleted (see
+            # WorktreeManager.remove(delete_branch=True) below), so
+            # re-running would build a brand-new branch and publish a
+            # second, duplicate pull request. This check is scoped to
+            # create_pr specifically: a plain resume (no create_pr) of an
+            # already-completed run is harmless and already correctly
+            # idempotent via the per-role cache below - short-circuiting
+            # unconditionally here would (and did, during development)
+            # break that existing, safe behavior. Only "blocked" terminal
+            # states fall through to a real retry, which is the whole point
+            # of --resume.
+            promotion_path = run_dir / "promotion.json"
+            if promotion_path.exists():
+                try:
+                    cached_promotion = json.loads(promotion_path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    cached_promotion = {}
+                if cached_promotion.get("status") in {"pr_created", "ready_for_human_review"}:
+                    cached_results = tuple(
+                        DevResult(**json.loads((run_dir / f"{role}.json").read_text(encoding="utf-8")))
+                        for role in ROLES
+                        if (run_dir / f"{role}.json").exists()
+                    )
+                    return WorkflowResult(run_id, "ready_for_human_review", cached_results, str(run_dir))
         envelope = RunEnvelope(run_id, run_dir)
         envelope.event("workflow_started", repository=self.manifest.name, dry_run=dry_run, resume=resume)
         results: list[DevResult] = []

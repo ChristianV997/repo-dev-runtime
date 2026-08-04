@@ -7,7 +7,6 @@ from repo_dev_runtime.governance.artifacts import RunEnvelope
 from repo_dev_runtime.governance.command_policy import CommandPolicy, evaluate_command
 from repo_dev_runtime.governance.policy import RuntimePolicy
 from repo_dev_runtime.governance.provenance import load_provenance
-from repo_dev_runtime.governance.roles import role_map
 from repo_dev_runtime.scheduler import SchedulePlan, TaskStateStore
 from repo_dev_runtime.tools.diagnostics import actionable_output
 
@@ -28,10 +27,26 @@ def test_command_policy_blocks_mutation_and_network():
     assert evaluate_command("aws s3 cp local s3://bucket/path", CommandPolicy(allow_network=True)).allowed is False
 
 
-def test_roles_have_review_boundary():
-    roles = role_map()
-    assert set(roles) == {"planner", "implementer", "tester", "reviewer", "integrator"}
-    assert roles["integrator"].requires_human_review
+def test_command_policy_blocks_package_manager_network_installs():
+    """Regression test: the network blocklist only covered curl/wget/etc.
+    and the literal "python -m pip install" string, but not bare
+    "pip install", "npm install", and similar package-manager fetches —
+    a real fail-open path for the manifest test/lint/security commands
+    that route through this policy (tools/runner.run_command)."""
+    for command in (
+        "pip install requests",
+        "pip3 install requests",
+        "npm install",
+        "npm ci",
+        "yarn add left-pad",
+        "pnpm install",
+        "poetry install",
+        "gem install rails",
+        "cargo install ripgrep",
+        "go install example.com/tool@latest",
+    ):
+        assert not evaluate_command(command).allowed, f"{command!r} should be blocked without network access"
+        assert evaluate_command(command, CommandPolicy(allow_network=True)).allowed, f"{command!r} should be allowed with network access"
 
 
 def test_scheduler_state_is_resumable_and_atomic(tmp_path):

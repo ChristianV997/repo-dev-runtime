@@ -9,7 +9,7 @@ import re
 
 from repo_dev_runtime.eval.fakes import FakeCodingProvider, default_fake_provider_factory
 from repo_dev_runtime.eval.fixtures import FIXTURE_CASES, build_fixture_repository
-from repo_dev_runtime.eval.harness import aggregate_scorecard, run_fixture_benchmark, run_fixture_case
+from repo_dev_runtime.eval.harness import _git_base_files_for_diff, aggregate_scorecard, run_fixture_benchmark, run_fixture_case
 from repo_dev_runtime.eval.models import EvalResult
 
 
@@ -276,6 +276,50 @@ def test_reviewer_receives_only_changed_file_baseline_contents(tmp_path):
     assert captured["base_files"] == {
         "validator.py": "def validate(value):\n    if value is None:\n        raise ValueError('value required')\n    return value\n",
     }
+
+
+def _init_git_repo(tmp_path):
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+
+
+def test_git_base_files_for_diff_handles_renamed_files(tmp_path):
+    """Regression test: git diff --name-only (the previous implementation)
+    reports only the new path for a rename, and `git show HEAD:<new-path>`
+    fails because that path didn't exist before the rename - so every
+    renamed file's baseline silently came back empty. --name-status -M
+    fixes this by keying the result on the new path while reading content
+    from the old one.
+
+    The file needs real substance (not a 2-line toy) - git's rename
+    similarity heuristic does not reliably fire as a rename for trivially
+    small files even with -M; below that size it reports an unrelated
+    delete+add pair instead, which would defeat this exact test."""
+    _init_git_repo(tmp_path)
+    original = "def validate(value):\n" + "".join(f"    # line {i}\n" for i in range(50)) + "    return value\n"
+    (tmp_path / "old_name.py").write_text(original, encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "initial"], check=True)
+
+    subprocess.run(["git", "-C", str(tmp_path), "mv", "old_name.py", "new_name.py"], check=True)
+    modified = original.replace("    return value\n", "    return value.strip()\n")
+    (tmp_path / "new_name.py").write_text(modified, encoding="utf-8")
+
+    result = _git_base_files_for_diff(tmp_path)
+    assert result == {"new_name.py": original}
+
+
+def test_git_base_files_for_diff_omits_binary_files(tmp_path):
+    _init_git_repo(tmp_path)
+    (tmp_path / "asset.bin").write_bytes(b"\x00\x01\x02binarydata\xff")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "initial"], check=True)
+
+    (tmp_path / "asset.bin").write_bytes(b"\x00\x01\x02changedbinarydata\xff")
+
+    result = _git_base_files_for_diff(tmp_path)
+    assert result == {}
 
 
 def test_prompt_injection_resisted_when_target_untouched(tmp_path):
