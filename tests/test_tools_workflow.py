@@ -1,6 +1,9 @@
+import os
 import subprocess
 import json
 import re
+import sys
+import time
 
 import pytest
 
@@ -101,6 +104,33 @@ def test_runner_blocks_repository_mutation(tmp_path):
         pass
     else:
         raise AssertionError("repository mutation should be blocked")
+
+
+def test_runner_timeout_terminates_child_process_tree(tmp_path):
+    child_pid_file = tmp_path / "child.pid"
+    script = tmp_path / "spawn_child.py"
+    script.write_text(
+        "import os, subprocess, sys, time\n"
+        f"child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+        f"open({str(child_pid_file)!r}, 'w').write(str(child.pid))\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+
+    result = run_command([sys.executable, str(script)], cwd=tmp_path, timeout_s=0.2)
+
+    assert result.timed_out is True
+    assert result.returncode is not None
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and not child_pid_file.exists():
+        time.sleep(0.02)
+    assert child_pid_file.exists()
+    child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+    try:
+        os.kill(child_pid, 0)
+    except OSError:
+        return
+    raise AssertionError("timed-out command left a child process running")
 
 
 def test_live_edit_resume_replays_checksum_validated_patches(tmp_path):

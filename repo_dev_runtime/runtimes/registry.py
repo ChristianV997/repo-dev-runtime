@@ -1,6 +1,7 @@
 """Runtime registration, health filtering, and explicit routing."""
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Mapping
 
@@ -63,18 +64,48 @@ class RuntimeRegistry:
 
 
 class RuntimeRouter:
-    def __init__(self, registry: RuntimeRegistry, *, policy: RuntimePolicy, routing: RoutingPolicy | None = None) -> None:
+    def __init__(
+        self,
+        registry: RuntimeRegistry,
+        *,
+        policy: RuntimePolicy,
+        routing: RoutingPolicy | None = None,
+        health_cache_ttl_s: float = 1.0,
+    ) -> None:
+        if not 0.0 <= float(health_cache_ttl_s) <= 60.0:
+            raise ValueError("health_cache_ttl_s must be between 0 and 60 seconds")
         self.registry = registry
         self.policy = policy
         self.routing = routing or RoutingPolicy()
         self.routing.validate()
+        self.health_cache_ttl_s = float(health_cache_ttl_s)
         self.calls = 0
+        self._available_cache: tuple[str, ...] | None = None
+        self._available_cache_at = 0.0
+
+    def invalidate_health_cache(self) -> None:
+        """Force the next route decision to refresh provider health."""
+        self._available_cache = None
+        self._available_cache_at = 0.0
+
+    def _available(self) -> tuple[str, ...]:
+        now = time.monotonic()
+        if (
+            self._available_cache is not None
+            and self.health_cache_ttl_s > 0
+            and now - self._available_cache_at < self.health_cache_ttl_s
+        ):
+            return self._available_cache
+        available = self.registry.available(policy=self.policy)
+        self._available_cache = available
+        self._available_cache_at = now
+        return available
 
     def route(self, task: DevTask, *, approved: bool = False) -> str | None:
         task.validate()
         if self.calls >= self.routing.max_calls:
             return None
-        available = set(self.registry.available(policy=self.policy))
+        available = set(self._available())
         for candidate in self.routing.preferred_by_role.get(task.role, ("ollama",)):
             if candidate not in available:
                 continue
