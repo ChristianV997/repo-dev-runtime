@@ -21,8 +21,8 @@ into a real repository:
 
 ```bash
 python -m repo_dev_runtime.cli benchmark --provider fake
-python -m repo_dev_runtime.cli benchmark --provider ollama --live --enable-ollama
-python -m repo_dev_runtime.cli benchmark --enable-pr-agent
+python -m repo_dev_runtime.cli benchmark --provider ollama --live --approve-external-provider-benchmark
+python -m repo_dev_runtime.cli benchmark --provider fake --enable-pr-agent --pr-agent-command "<reviewer-command>" --live --approve-external-provider-benchmark
 python -m repo_dev_runtime.cli benchmark --enable-openhands --enable-mini-swe-agent
 ```
 
@@ -31,6 +31,11 @@ network access, credentials, or installed third-party software. Real
 providers require `--live`; `--enable-openhands`/`--enable-mini-swe-agent`
 never install or execute anything — they only attach a blocked
 `BenchmarkProviderSpec` record to the report.
+
+The fake baseline automatically uses the deterministic fake reviewer so all
+seven fixtures, including the independent-review rejection case, are covered.
+An explicitly enabled PR-Agent bridge must have a configured, executable
+command; otherwise the CLI fails before it creates any fixture worktree.
 
 ## Provider scorecard
 

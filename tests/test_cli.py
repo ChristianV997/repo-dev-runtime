@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 
@@ -82,7 +83,7 @@ def test_cli_benchmark_defaults_to_fake_provider(tmp_path, capsys, fast_benchmar
     assert report["schema"] == "RepoDev.BenchmarkReport.v1"
     assert report["scorecards"][0]["provider"] == "fake_coding_provider"
     assert report["scorecards"][0]["provider_metadata"]["benchmark_kind"] == "synthetic"
-    assert report["scorecards"][0]["provider_metadata"]["reviewer_kind"] == "none"
+    assert report["scorecards"][0]["provider_metadata"]["reviewer_kind"] == "fake"
     assert len(report["fixture_results"]) == 7
 
 
@@ -281,4 +282,22 @@ def test_cli_enable_pr_agent_requires_live_and_approval(tmp_path):
     )
     assert without_approval.returncode == 1
     assert "explicit approval" in json.loads(without_approval.stdout)["reason"]
+
+
+def test_cli_enable_pr_agent_requires_a_configured_command_before_fixture_creation(tmp_path):
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "repo_dev_runtime.cli", "benchmark",
+            "--enable-pr-agent", "--live", "--approve-external-provider-benchmark",
+            "--fixtures-root", str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "PR_AGENT_COMMAND": ""},
+    )
+
+    assert result.returncode == 1
+    assert json.loads(result.stdout)["reason"] == "pr_agent_command_not_configured"
+    assert not list(tmp_path.iterdir())
 
