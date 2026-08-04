@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 
 from ..contracts.models import DevResult, DevTask, RuntimeHealth
 from ..governance.credentials import redact_text
+from .structured_output import ollama_format
 
 
 class OllamaRuntime:
@@ -32,9 +33,11 @@ class OllamaRuntime:
         if not self.enabled:
             return DevResult(task.task_id, self.name, "skipped", error_type="runtime_disabled")
         payload = {"model": task.model if task.model != "default" else self.model, "messages": [{"role": "user", "content": task.prompt}], "stream": False}
-        # Ollama's JSON mode reduces malformed contract responses without granting model authority.
-        if task.role in {"implementer", "reviewer"}:
-            payload["format"] = "json"
+        # Exact schemas reduce malformed contract output; workflow validators
+        # remain the authoritative safety boundary.
+        response_format = ollama_format(task.role)
+        if response_format is not None:
+            payload["format"] = response_format
         started = time.perf_counter()
         try:
             request = Request(f"{self.base_url}/api/chat", data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")

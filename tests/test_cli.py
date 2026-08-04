@@ -74,6 +74,22 @@ def test_cli_enable_openclaw_flag_is_wired_into_default_registry(tmp_path, monke
     assert captured.get("openclaw_enabled") is True
 
 
+def test_cli_enable_aider_flag_is_wired_into_default_registry(tmp_path, monkeypatch):
+    captured = {}
+    real_default_registry = cli.default_registry
+
+    def spying_default_registry(**kwargs):
+        captured.update(kwargs)
+        return real_default_registry(**kwargs)
+
+    monkeypatch.setattr(cli, "default_registry", spying_default_registry)
+    cli.main([
+        "run", str(tmp_path), "--prompt", "inspect", "--live", "--enable-aider",
+        "--artifacts-root", str(tmp_path / "artifacts"),
+    ])
+    assert captured.get("aider_enabled") is True
+
+
 def test_cli_dry_run_is_provider_independent(tmp_path):
     result = subprocess.run(
         [sys.executable, "-m", "repo_dev_runtime.cli", "run", str(tmp_path), "--prompt", "inspect", "--artifacts-root", str(tmp_path / "artifacts")],

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class RuntimePolicy:
     allow_ollama: bool = False
+    allow_aider: bool = False
     allow_omniroute: bool = False
     allow_openclaw: bool = False
     allow_agent_reach: bool = False
@@ -39,6 +40,8 @@ class RuntimePolicy:
             raise PermissionError("automatic merge is permanently disabled")
         if capability == "network" and not self.network_access:
             raise PermissionError("network access is disabled")
+        if capability == "aider" and not self.allow_aider:
+            raise PermissionError("Aider is disabled")
         if capability == "external_provider_benchmark" and not (self.allow_external_provider_benchmark and approved):
             raise PermissionError("external provider benchmarking requires explicit approval")
         if capability == "pr_agent_review" and not (self.allow_external_provider_benchmark and approved):
@@ -49,6 +52,7 @@ class RuntimePolicy:
             "branch_publish",
             "merge",
             "network",
+            "aider",
             "external_provider_benchmark",
             "pr_agent_review",
         }:

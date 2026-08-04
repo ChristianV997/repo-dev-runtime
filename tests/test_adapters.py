@@ -5,6 +5,7 @@ from urllib.error import URLError
 
 from repo_dev_runtime.contracts.models import DevTask, SensorRequest
 from repo_dev_runtime.runtimes.ollama import OllamaRuntime
+from repo_dev_runtime.runtimes.aider import AiderRuntime
 from repo_dev_runtime.runtimes.openai_compatible import OpenAICompatibleRuntime
 from repo_dev_runtime.runtimes.openclaw import OpenClawRuntime
 from repo_dev_runtime.runtimes.sidecars import DeerFlowRuntime, HermesRuntime
@@ -43,6 +44,17 @@ def test_openclaw_is_reachable_through_the_default_registry_and_health_output():
     assert "openclaw" in health
     assert health["openclaw"].configured is False
     assert health["openclaw"].reachable is False
+
+
+def test_aider_is_registered_but_disabled_by_default():
+    """Aider can be selected only by explicit policy and CLI opt-in."""
+    from repo_dev_runtime.runtimes.factory import default_registry
+
+    registry = default_registry()
+    assert isinstance(registry.get("aider"), AiderRuntime)
+    health = registry.health()["aider"]
+    assert health.configured is False
+    assert health.reachable is False
 
 
 def test_hermes_normalizes_openai_response():

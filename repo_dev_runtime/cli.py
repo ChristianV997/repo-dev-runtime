@@ -49,6 +49,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run.add_argument("--resume", action="store_true")
     run.add_argument("--live", action="store_true")
     run.add_argument("--enable-ollama", action="store_true")
+    run.add_argument("--enable-aider", action="store_true", help="enable the sandboxed Aider implementer; requires a separate planner/reviewer provider")
     run.add_argument("--enable-omniroute", action="store_true")
     run.add_argument("--enable-sidecars", action="store_true")
     run.add_argument("--enable-openclaw", action="store_true", help="reach the OpenClaw sidecar adapter; still fails closed (blocked) in v1 since its WebSocket client is unimplemented")
@@ -97,6 +98,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         allow_omniroute = args.enable_omniroute or args.enable_sidecars
         policy = RuntimePolicy(
             allow_ollama=args.enable_ollama,
+            allow_aider=args.enable_aider,
             allow_omniroute=allow_omniroute,
             allow_openclaw=args.enable_openclaw,
             allow_paid_routing=allow_paid,
@@ -111,7 +113,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps({"status": "blocked", "reason": "apply_edits_requires_live"}, indent=2))
             return 1
         artifacts_root = Path(args.artifacts_root).expanduser() if args.artifacts_root else Path.home() / ".repo-dev-runtime" / "runs" / manifest.name
-        runtime = RuntimeRouter(default_registry(ollama_enabled=args.enable_ollama if args.live else None, omniroute_enabled=args.enable_omniroute if args.live else None, hermes_enabled=args.enable_sidecars if args.live else None, deerflow_enabled=args.enable_sidecars if args.live else None, openclaw_enabled=args.enable_openclaw if args.live else None), policy=policy) if args.live else DryRunRuntime()
+        runtime = RuntimeRouter(default_registry(ollama_enabled=args.enable_ollama if args.live else None, aider_enabled=args.enable_aider if args.live else None, omniroute_enabled=args.enable_omniroute if args.live else None, hermes_enabled=args.enable_sidecars if args.live else None, deerflow_enabled=args.enable_sidecars if args.live else None, openclaw_enabled=args.enable_openclaw if args.live else None), policy=policy) if args.live else DryRunRuntime()
         publisher = GitHubPublisher(policy=policy) if args.create_pr else None
         try:
             result = DevelopmentWorkflow(manifest=manifest, policy=policy, runtime=runtime, artifacts_root=artifacts_root).run(prompt=args.prompt, base_ref=args.base_ref, dry_run=not args.live, run_id=args.run_id, resume=args.resume, approved=args.approve_paid, publisher=publisher, create_pr=args.create_pr, apply_edits=args.apply_edits, max_fix_attempts=args.max_fix_attempts)

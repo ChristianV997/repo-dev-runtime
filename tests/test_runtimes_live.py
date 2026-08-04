@@ -10,6 +10,8 @@ HTTP server (tests/support/live_servers.py) over a real TCP socket.
 """
 from __future__ import annotations
 
+import json
+
 from repo_dev_runtime.contracts.models import DevTask
 from repo_dev_runtime.runtimes.ollama import OllamaRuntime
 from repo_dev_runtime.runtimes.openai_compatible import OpenAICompatibleRuntime
@@ -52,6 +54,25 @@ def test_ollama_execute_succeeds_against_real_server():
         result = runtime.execute(_task())
     assert result.status == "succeeded"
     assert result.output == "hello from ollama"
+
+
+def test_ollama_sends_exact_schema_for_implementer_contract():
+    captured: dict = {}
+    routes = {("POST", "/api/chat"): capturing(captured, json_response(200, {"message": {"content": "{}"}}))}
+    with stub_server(routes) as server:
+        OllamaRuntime(base_url=server.base_url, enabled=True).execute(_task(role="implementer"))
+    schema = json.loads(captured["body"].decode())["format"]
+    assert schema["properties"]["schema"]["const"] == "RepoDev.EditProposal.v1"
+    assert set(schema["required"]) >= {"proposal_id", "task_id", "base_commit", "context_hash", "edits"}
+
+
+def test_ollama_sends_exact_schema_for_reviewer_contract():
+    captured: dict = {}
+    routes = {("POST", "/api/chat"): capturing(captured, json_response(200, {"message": {"content": "{}"}}))}
+    with stub_server(routes) as server:
+        OllamaRuntime(base_url=server.base_url, enabled=True).execute(_task(role="reviewer"))
+    body = json.loads(captured["body"].decode())
+    assert body["format"]["properties"]["schema"]["const"] == "RepoDev.ReviewVerdict.v1"
 
 
 def test_ollama_execute_classifies_http_error():
@@ -110,6 +131,17 @@ def test_openai_compatible_execute_succeeds_against_real_server():
         result = runtime.execute(_task())
     assert result.status == "succeeded"
     assert result.output == "hi there"
+
+
+def test_openai_compatible_sends_exact_schema_for_contract_roles():
+    captured: dict = {}
+    routes = {("POST", "/v1/chat/completions"): capturing(captured, json_response(200, {"choices": [{"message": {"content": "{}"}}]}))}
+    with stub_server(routes) as server:
+        OpenAICompatibleRuntime(base_url=server.base_url, enabled=True).execute(_task(role="implementer"))
+    response_format = json.loads(captured["body"].decode())["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["strict"] is True
+    assert response_format["json_schema"]["schema"]["properties"]["schema"]["const"] == "RepoDev.EditProposal.v1"
 
 
 def test_openai_compatible_execute_classifies_oversized_response():

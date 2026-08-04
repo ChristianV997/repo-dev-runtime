@@ -16,7 +16,7 @@ class RoutingPolicy:
 
     preferred_by_role: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: {
         "planner": ("ollama", "openai_compatible", "hermes", "deerflow"),
-        "implementer": ("ollama", "openai_compatible", "hermes", "deerflow"),
+        "implementer": ("aider", "ollama", "openai_compatible", "hermes", "deerflow"),
         "tester": ("ollama", "openai_compatible"),
         "reviewer": ("ollama", "openai_compatible", "hermes", "deerflow"),
         "integrator": ("ollama", "openai_compatible"),
@@ -66,6 +66,8 @@ class RuntimeRegistry:
             if not health.configured or not health.reachable:
                 continue
             if name == "ollama" and not policy.allow_ollama:
+                continue
+            if name == "aider" and not policy.allow_aider:
                 continue
             if name == "openai_compatible" and not policy.allow_omniroute:
                 continue
@@ -127,6 +129,8 @@ class RuntimeRouter:
                 continue
             if candidate == "openai_compatible" or candidate in {"hermes", "deerflow"}:
                 self.policy.authorize("paid_routing", approved=approved)
+            if candidate == "aider":
+                self.policy.authorize("aider")
             return candidate
         return None
 
