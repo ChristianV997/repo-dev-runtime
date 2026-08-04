@@ -3,6 +3,8 @@ and repo_dev_runtime.eval.harness."""
 from __future__ import annotations
 
 import subprocess
+import json
+import re
 
 import pytest
 
@@ -99,6 +101,71 @@ def test_malformed_incomplete_task_yields_provider_failure(tmp_path):
     result = run_fixture_case(case, make_provider=default_fake_provider_factory, provider_name="fake", tmp_root=tmp_path, max_fix_attempts=1)
 
     assert result.outcome == "provider_failure"
+
+
+def test_real_provider_fixture_task_includes_contract_and_rejects_wrong_task_id(tmp_path):
+    from repo_dev_runtime.contracts.models import DevResult, RuntimeHealth
+
+    case = next(c for c in FIXTURE_CASES if c.fixture_id == "one_file_bugfix")
+    captured = {}
+
+    class WrongTaskProvider:
+        name = "wrong_task"
+
+        def health(self):
+            return RuntimeHealth(self.name, True, True)
+
+        def execute(self, task):
+            captured["prompt"] = task.prompt
+            head = re.search(r"base_commit=([0-9a-f]+)", task.prompt).group(1)
+            context = re.search(r"context_hash=([0-9a-f]+)", task.prompt).group(1)
+            return DevResult(task.task_id, self.name, "succeeded", output=json.dumps({
+                "schema": "RepoDev.EditProposal.v1",
+                "proposal_id": "wrong-task",
+                "task_id": "another-task",
+                "base_commit": head,
+                "context_hash": context,
+                "summary": "attempted edit",
+                "edits": [{"path": "calc.py", "format": "search_replace", "search": "return a - b", "replace": "return a + b"}],
+            }))
+
+    result = run_fixture_case(case, make_provider=lambda _case: WrongTaskProvider(), provider_name="wrong_task", tmp_root=tmp_path)
+
+    assert "Return only one JSON object using schema RepoDev.EditProposal.v1" in captured["prompt"]
+    assert "Repository context:" in captured["prompt"]
+    assert result.outcome == "invalid_proposal"
+    assert result.error_message == "proposal task_id mismatch"
+
+
+def test_valid_schema_but_failing_behavior_is_not_scored_as_success(tmp_path):
+    from repo_dev_runtime.contracts.models import DevResult, RuntimeHealth
+
+    case = next(c for c in FIXTURE_CASES if c.fixture_id == "one_file_bugfix")
+
+    class BehaviorFailingProvider:
+        name = "behavior_failing"
+
+        def health(self):
+            return RuntimeHealth(self.name, True, True)
+
+        def execute(self, task):
+            head = re.search(r"base_commit=([0-9a-f]+)", task.prompt).group(1)
+            context = re.search(r"context_hash=([0-9a-f]+)", task.prompt).group(1)
+            return DevResult(task.task_id, self.name, "succeeded", output=json.dumps({
+                "schema": "RepoDev.EditProposal.v1",
+                "proposal_id": "behavior-failing",
+                "task_id": task.task_id,
+                "base_commit": head,
+                "context_hash": context,
+                "summary": "syntactically valid but incorrect replacement",
+                "edits": [{"path": "calc.py", "format": "whole_file", "content": "return a + b\n"}],
+            }))
+
+    result = run_fixture_case(case, make_provider=lambda _case: BehaviorFailingProvider(), provider_name="behavior_failing", tmp_root=tmp_path, max_fix_attempts=0)
+
+    assert result.proposal_valid is True
+    assert result.outcome == "test_failure"
+    assert result.test_result["status"] == "failed"
 
 
 def test_test_failure_requires_one_repair_iteration(tmp_path):

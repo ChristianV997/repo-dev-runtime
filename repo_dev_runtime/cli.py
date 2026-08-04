@@ -61,6 +61,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run.add_argument("--artifacts-root")
     benchmark = sub.add_parser("benchmark", help="run the deterministic fixture benchmark against a coding-agent provider")
     benchmark.add_argument("--fixtures-root", help="temp directory root for synthetic fixture repos (defaults to the OS temp dir)")
+    benchmark.add_argument("--fixture", action="append", choices=[case.fixture_id for case in FIXTURE_CASES], help="run only a named fixture; repeat to select several (default: all fixtures)")
     benchmark.add_argument("--provider", choices=["fake", "ollama", "openai_compatible"], default="fake")
     benchmark.add_argument("--provider-module", help="benchmark an externally-defined provider, given as 'package.module:ClassName'; must implement the DevelopmentRuntime protocol. Requires --live.")
     benchmark.add_argument("--provider-name", help="scorecard name for --provider-module (defaults to the provider's own .name)")
@@ -74,6 +75,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     benchmark.add_argument("--enable-mini-swe-agent", action="store_true", help="prep-only: emits a blocked BenchmarkProviderSpec, never installs or executes mini-SWE-agent")
     benchmark.add_argument("--provider-metadata-json", help='JSON object of provider provenance recorded on the scorecard, e.g. \'{"version": "1.2.3", "lock_hash": "...", "python": "3.12", "model": "..."}\'')
     benchmark.add_argument("--max-fix-attempts", type=int, default=1, help="bounded repair proposals per fixture (0-3)")
+    benchmark.add_argument("--task-timeout-s", type=float, default=120.0, help="per-provider task timeout for this benchmark (0.001-900 seconds)")
     benchmark.add_argument("--json-out")
     benchmark.add_argument("--markdown-out")
     benchmark.add_argument("--history-out", nargs="?", const="", help="append this run's JSON report as one JSONL line; defaults to ~/.repo-dev-runtime/eval-history/<date>.jsonl when given without a value")
@@ -129,6 +131,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _run_benchmark(args) -> int:
     if not 0 <= args.max_fix_attempts <= 3:
         print(json.dumps({"status": "blocked", "reason": "max_fix_attempts_out_of_bounds"}, indent=2))
+        return 1
+    if not 0.001 <= args.task_timeout_s <= 900:
+        print(json.dumps({"status": "blocked", "reason": "task_timeout_out_of_bounds"}, indent=2))
         return 1
     if args.provider_module and args.provider != "fake":
         print(json.dumps({"status": "blocked", "reason": "provider_module_conflicts_with_provider"}, indent=2))
@@ -232,11 +237,20 @@ def _run_benchmark(args) -> int:
         "reviewer_kind": "real" if args.enable_pr_agent else ("fake" if args.fake_reviewer else "none"),
     }
 
-    results = run_fixture_benchmark(FIXTURE_CASES, make_provider=make_provider, provider_name=provider_name, reviewer_adapter=reviewer_adapter, tmp_root=tmp_root, max_fix_attempts=args.max_fix_attempts)
+    selected_cases = tuple(case for case in FIXTURE_CASES if not args.fixture or case.fixture_id in args.fixture)
+    results = run_fixture_benchmark(
+        selected_cases,
+        make_provider=make_provider,
+        provider_name=provider_name,
+        reviewer_adapter=reviewer_adapter,
+        tmp_root=tmp_root,
+        max_fix_attempts=args.max_fix_attempts,
+        task_timeout_s=args.task_timeout_s,
+    )
     # Each fixture's own expected_outcome is the ground truth for reviewer
     # agreement/disagreement — without this, every case with a reviewer
     # opinion counts as "agreement" and disagreement is structurally always 0.
-    expected_outcomes = {case.fixture_id: case.expected_outcome for case in FIXTURE_CASES}
+    expected_outcomes = {case.fixture_id: case.expected_outcome for case in selected_cases}
     scorecard = aggregate_scorecard(provider_name, results, provider_metadata=provider_metadata, expected_outcomes=expected_outcomes)
 
     provider_specs = []

@@ -7,6 +7,7 @@ software.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -75,11 +76,16 @@ class FakeCodingProvider:
             "proposal_id": str(uuid.uuid4()),
             "task_id": task.task_id,
             "base_commit": _git_head(task.repository),
-            "context_hash": "eval",
+            "context_hash": _contract_value(task.prompt, "context_hash") or "eval",
             "summary": turn.summary,
             "edits": [dict(edit) for edit in turn.edits],
         }
         return DevResult(task_id=task.task_id, runtime=self.name, status="succeeded", output=json.dumps(proposal))
+
+
+def _contract_value(prompt: str, name: str) -> str:
+    match = re.search(rf"\b{re.escape(name)}=([0-9a-f]+)", prompt)
+    return match.group(1) if match else ""
 
 
 def default_fake_provider_factory(case: Any) -> FakeCodingProvider:

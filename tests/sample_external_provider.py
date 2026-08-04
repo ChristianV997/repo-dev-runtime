@@ -6,6 +6,7 @@ never importable as part of the shipped package or reachable by routing.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import uuid
 
@@ -15,6 +16,13 @@ from repo_dev_runtime.contracts.models import DevResult, DevTask, RuntimeHealth
 def _git_head(root: str) -> str:
     result = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
     return result.stdout.strip()
+
+
+def _context_hash(prompt: str) -> str:
+    match = re.search(r"\bcontext_hash=([0-9a-f]+)", prompt)
+    if not match:
+        raise ValueError("fixture harness did not provide a context hash")
+    return match.group(1)
 
 
 class SampleExternalProvider:
@@ -32,7 +40,7 @@ class SampleExternalProvider:
             "proposal_id": str(uuid.uuid4()),
             "task_id": task.task_id,
             "base_commit": _git_head(task.repository),
-            "context_hash": "eval",
+            "context_hash": _context_hash(task.prompt),
             "summary": "sample external provider edit",
             "edits": [{"path": "calc.py", "format": "whole_file", "content": "def add(a, b):\n    return a + b\n"}],
         }

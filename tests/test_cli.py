@@ -87,6 +87,16 @@ def test_cli_benchmark_defaults_to_fake_provider(tmp_path, capsys, fast_benchmar
     assert len(report["fixture_results"]) == 7
 
 
+def test_cli_benchmark_fixture_selection_is_explicit_and_bounded(tmp_path, capsys, fast_benchmark):
+    code, report = _run_cli([
+        "benchmark", "--fixture", "one_file_bugfix", "--fixtures-root", str(tmp_path),
+    ], capsys)
+
+    assert code == 0
+    assert [item["fixture_id"] for item in report["fixture_results"]] == ["one_file_bugfix"]
+    assert report["scorecards"][0]["tasks_attempted"] == 1
+
+
 def test_cli_benchmark_real_provider_requires_live(tmp_path, capsys, fast_benchmark):
     code, result = _run_cli(["benchmark", "--provider", "ollama", "--fixtures-root", str(tmp_path)], capsys)
     assert code == 1
@@ -171,6 +181,15 @@ def test_cli_max_fix_attempts_out_of_bounds_is_rejected(tmp_path):
     )
     assert negative.returncode == 1
     assert json.loads(negative.stdout)["reason"] == "max_fix_attempts_out_of_bounds"
+
+
+def test_cli_task_timeout_out_of_bounds_is_rejected(tmp_path):
+    result = subprocess.run(
+        [sys.executable, "-m", "repo_dev_runtime.cli", "benchmark", "--task-timeout-s", "901", "--fixtures-root", str(tmp_path)],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 1
+    assert json.loads(result.stdout)["reason"] == "task_timeout_out_of_bounds"
 
 
 def test_cli_provider_module_conflicts_with_explicit_provider(tmp_path):
