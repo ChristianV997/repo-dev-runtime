@@ -59,6 +59,49 @@ def test_router_caches_health_probes_with_explicit_invalidation():
     assert runtime.health_calls == 2
 
 
+def test_registry_health_fails_closed_when_optional_provider_raises():
+    class BrokenRuntime:
+        name = "ollama"
+
+        def health(self):
+            raise RuntimeError("token=health-secret")
+
+    health = RuntimeRegistry({"ollama": BrokenRuntime()}).health()["ollama"]
+
+    assert health.configured is True
+    assert health.reachable is False
+    assert "health-secret" not in health.detail
+    assert "[REDACTED]" in health.detail
+
+
+def test_router_converts_provider_exceptions_into_failed_results():
+    class BrokenRuntime(FakeRuntime):
+        def execute(self, task):
+            raise RuntimeError("api_key=execution-secret")
+
+    policy = RuntimePolicy(allow_ollama=True)
+    router = RuntimeRouter(RuntimeRegistry({"ollama": BrokenRuntime()}), policy=policy)
+    task = DevTask(task_id="t", repository="r", base_ref="HEAD", role="planner", prompt="x")
+
+    result = router.execute(task)
+
+    assert result.status == "failed"
+    assert result.error_type == "RuntimeError"
+    assert "execution-secret" not in result.error_message
+    assert "[REDACTED]" in result.error_message
+
+
+def test_router_returns_policy_block_instead_of_raising_from_execute():
+    policy = RuntimePolicy(allow_omniroute=True, allow_paid_routing=True)
+    router = RuntimeRouter(RuntimeRegistry({"openai_compatible": FakeRuntime()}), policy=policy)
+    task = DevTask(task_id="t", repository="r", base_ref="HEAD", role="planner", prompt="x")
+
+    result = router.execute(task)
+
+    assert result.status == "blocked"
+    assert result.error_type == "policy_denied"
+
+
 def test_workflow_resume_skips_completed_roles(tmp_path):
     manifest = RepoManifest(name="fixture", root=str(tmp_path), allowed_paths=(".",))
     run_root = tmp_path.parent / "run-artifacts"
