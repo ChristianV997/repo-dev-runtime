@@ -7,6 +7,7 @@ from typing import Mapping
 
 from ..contracts.models import DevResult, DevTask, RuntimeHealth
 from ..governance.policy import RuntimePolicy
+from ..governance.credentials import redact_text
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,20 @@ class RuntimeRegistry:
     def health(self) -> dict[str, RuntimeHealth]:
         result: dict[str, RuntimeHealth] = {}
         for name, runtime in self._runtimes.items():
-            health = runtime.health()  # type: ignore[attr-defined]
+            try:
+                health = runtime.health()  # type: ignore[attr-defined]
+                if not isinstance(health, RuntimeHealth):
+                    raise TypeError("runtime health() did not return RuntimeHealth")
+            except Exception as exc:
+                # A broken optional provider must not make the health command
+                # or routing crash. It is unavailable until its own adapter
+                # becomes healthy again.
+                health = RuntimeHealth(
+                    name,
+                    configured=True,
+                    reachable=False,
+                    detail=redact_text(f"health check failed: {type(exc).__name__}: {exc}")[:500],
+                )
             result[name] = health
         return result
 
@@ -115,11 +129,35 @@ class RuntimeRouter:
         return None
 
     def execute(self, task: DevTask, *, approved: bool = False) -> DevResult:
-        name = self.route(task, approved=approved)
+        try:
+            name = self.route(task, approved=approved)
+        except PermissionError as exc:
+            return DevResult(task.task_id, "router", "blocked", error_type="policy_denied", error_message=redact_text(str(exc)[:500]))
         if name is None:
             return DevResult(task.task_id, "router", "blocked", error_type="no_authorized_runtime")
         self.calls += 1
-        result = self.registry.get(name).execute(task)  # type: ignore[attr-defined]
-        telemetry = dict(result.telemetry) | {"routed_runtime": name, "router_calls": self.calls}
-        return DevResult(task.task_id, result.runtime, result.status, result.output, result.changed_files, result.commit_sha, result.tests, telemetry, result.error_type, result.error_message, result.created_at)
+        try:
+            result = self.registry.get(name).execute(task)  # type: ignore[attr-defined]
+            result.validate()
+        except Exception as exc:
+            return DevResult(
+                task.task_id,
+                name,
+                "failed",
+                error_type=type(exc).__name__,
+                error_message=redact_text(str(exc)[:500]),
+                telemetry={"routed_runtime": name, "router_calls": self.calls},
+            )
+        try:
+            telemetry = dict(result.telemetry) | {"routed_runtime": name, "router_calls": self.calls}
+            return DevResult(result.task_id, result.runtime, result.status, result.output, result.changed_files, result.commit_sha, result.tests, telemetry, result.error_type, result.error_message, result.created_at)
+        except Exception as exc:
+            return DevResult(
+                task.task_id,
+                name,
+                "failed",
+                error_type=type(exc).__name__,
+                error_message=redact_text(str(exc)[:500]),
+                telemetry={"routed_runtime": name, "router_calls": self.calls},
+            )
 
