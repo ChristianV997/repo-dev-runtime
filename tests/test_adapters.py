@@ -1,6 +1,7 @@
 import json
 import sys
 import time
+from urllib.error import URLError
 
 from repo_dev_runtime.contracts.models import DevTask, SensorRequest
 from repo_dev_runtime.runtimes.ollama import OllamaRuntime
@@ -51,6 +52,30 @@ def test_hermes_normalizes_openai_response():
     result = HermesRuntime(enabled=True, request=fake_request).execute(task())
     assert result.status == "succeeded"
     assert result.output == "plan"
+
+
+def test_http_and_bridge_adapter_errors_redact_credential_shaped_text(monkeypatch):
+    def raise_error(*args, **kwargs):
+        raise URLError("api_key=adapter-secret")
+
+    monkeypatch.setattr("repo_dev_runtime.runtimes.ollama.urlopen", raise_error)
+    ollama_result = OllamaRuntime(enabled=True).execute(task())
+    assert "adapter-secret" not in ollama_result.error_message
+    assert "[REDACTED]" in ollama_result.error_message
+
+    monkeypatch.setattr("repo_dev_runtime.runtimes.openai_compatible.urlopen", raise_error)
+    openai_result = OpenAICompatibleRuntime(enabled=True).execute(task())
+    assert "adapter-secret" not in openai_result.error_message
+    assert "[REDACTED]" in openai_result.error_message
+
+    hermes_result = HermesRuntime(enabled=True, request=raise_error).execute(task())
+    assert "adapter-secret" not in hermes_result.error_message
+    assert "[REDACTED]" in hermes_result.error_message
+
+    monkeypatch.setattr("repo_dev_runtime.sensors.agent_reach.run_command", raise_error)
+    sensor_result = AgentReachSensor(command=["bridge"], enabled=True).collect(SensorRequest.create(query="x", objective="y"))
+    assert "adapter-secret" not in sensor_result.error_message
+    assert "[REDACTED]" in sensor_result.error_message
 
 
 def test_agent_reach_disabled_without_subprocess():
