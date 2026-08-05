@@ -22,7 +22,10 @@ Windows); examples below use POSIX/bash syntax, but every command is a
 plain `python -m ...` invocation that works unchanged on Windows (PowerShell
 or cmd) — only the path separators and line-continuation character differ.
 Provider SDKs and sidecars remain external processes or HTTP services behind
-bounded adapters.
+bounded adapters. See `docs/windows-powershell-setup.md` for a
+PowerShell-first walkthrough of every integration (GitHub, OpenRouter,
+Ollama, Aider, PR-Agent, `infra/aws`) in one place; CI runs the full test
+suite on both `ubuntu-latest` and `windows-latest`.
 
 If you run `pytest tests/` directly instead of `python -m pytest`, the
 package won't be on `sys.path` unless it's installed (`pip install -e .`)
