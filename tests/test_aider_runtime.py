@@ -103,7 +103,11 @@ def test_aider_forwards_openrouter_credentials_to_the_subprocess(tmp_path, monke
     script = _writer(
         tmp_path,
         "import os\nfrom pathlib import Path\n"
-        "Path('calc.py').write_text('KEY=' + os.environ.get('OPENROUTER_API_KEY', 'MISSING') + '\\n', encoding='utf-8')\n",
+        # write_bytes, not write_text: text-mode writes translate LF to
+        # CRLF on Windows, which would corrupt this exact-content
+        # assertion the same way aider.py's own sandbox writer already
+        # guards against (see its "Preserve source bytes exactly" note).
+        "Path('calc.py').write_bytes(('KEY=' + os.environ.get('OPENROUTER_API_KEY', 'MISSING') + '\\n').encode('utf-8'))\n",
     )
     task = _task(root, head)
     runtime = AiderRuntime(command=[sys.executable, str(script)], model="openrouter/test", enabled=True)
