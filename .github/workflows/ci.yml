@@ -43,3 +43,23 @@ jobs:
           PYTHONPATH=. python scripts/check_benchmark_report.py "${RUNNER_TEMP}/benchmark.json"
       - name: Check whitespace
         run: git diff --check
+
+  test-windows:
+    # Windows-specific code paths (scheduler.py's msvcrt locking,
+    # runtimes/aider.py's/sensors/agent_reach.py's CREATE_NEW_PROCESS_GROUP +
+    # taskkill process-tree kill, the posix=os.name != "nt" shlex guards)
+    # were previously exercised only by unit tests that mock os.name, never
+    # by an actual Windows process. This job is the one thing that turns
+    # "cross-platform by design" into "cross-platform, CI-verified."
+    # Scoped to the test suite only - ruff/compileall/the benchmark gate
+    # are platform-agnostic and already covered by the Linux job above.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test runner
+        run: python -m pip install --upgrade pytest
+      - name: Run tests
+        run: python -m pytest -q

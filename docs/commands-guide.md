@@ -6,6 +6,9 @@ shape already verified in `README.md` and
 `docs/quickstart-consumer-onboarding.md`; this doc's job is picking the
 right one for the situation you're in and ordering them sensibly.
 
+On PowerShell, see `docs/windows-powershell-setup.md` for the mechanical
+bash-to-PowerShell translation applied to every command below.
+
 ## 1. Sanity-check a repository before spending anything
 
 Always start here — it costs nothing (no credentials, no network, no
