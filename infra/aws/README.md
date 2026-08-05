@@ -42,9 +42,11 @@ every 2 hours), `run_prompt`, and `openrouter_model`.
 
 ## Populate the secrets (required, do this after apply)
 
-Terraform only creates the secret *containers*, printed as outputs.
-Populate their values directly, so the real values never touch Terraform
-state or this repository:
+Terraform only creates the secret/parameter *containers*, printed as
+outputs (plus a placeholder `"REPLACE_ME"` value for the SSM parameter
+that a subsequent `terraform apply` never overwrites, via
+`lifecycle.ignore_changes`). Populate their real values directly, so
+they never touch Terraform state or this repository:
 
 ```bash
 aws secretsmanager put-secret-value \
@@ -54,11 +56,19 @@ aws secretsmanager put-secret-value \
 aws secretsmanager put-secret-value \
   --secret-id "$(terraform output -raw openrouter_key_secret_arn)" \
   --secret-string "sk-or-your-real-key"
+
+aws ssm put-parameter --overwrite --type SecureString \
+  --name "$(terraform output -raw ollama_url_parameter_name)" \
+  --value "http://your-real-ollama-endpoint:11434"
 ```
 
 The `GITHUB_TOKEN` needs `repo` scope; the target repository's `origin`
 remote must be a real `github.com` URL for `--create-pr` to work (see
-`docs/credential-policy.md`).
+`docs/credential-policy.md`). The Ollama URL is stored as a
+`SecureString` because it can embed credentials (e.g. `http://user:pass@host`)
+— an earlier revision of this module baked it directly into the
+instance's `user_data` as plaintext; `run-once.sh` now fetches it via
+`aws ssm get-parameter --with-decryption` at runtime instead.
 
 ## Every scheduled run needs `--approve-paid`
 
@@ -73,10 +83,11 @@ directly on the instance, keep this flag.
 
 ## Ollama as the backup
 
-`var.ollama_url` defaults to `http://127.0.0.1:11434` (a local Ollama
-instance on the same box) — point it at your real Ollama endpoint. If
-you don't run Ollama at all, OpenRouter alone still works; you simply
-lose the automatic backup path when OpenRouter is unreachable.
+Populate the SSM parameter (see above) with your real, reachable Ollama
+endpoint. If you don't run Ollama at all, OpenRouter alone still works;
+you simply lose the automatic backup path when OpenRouter is
+unreachable, and `run-once.sh`'s `aws ssm get-parameter` call will fail
+closed with an empty/placeholder value rather than silently working.
 
 ## Verify it worked
 

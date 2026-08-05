@@ -17,3 +17,8 @@ output "openrouter_key_secret_arn" {
   description = "Secrets Manager ARN to populate with a real OPENROUTER_API_KEY after apply - see README.md."
   value       = aws_secretsmanager_secret.openrouter_key.arn
 }
+
+output "ollama_url_parameter_name" {
+  description = "SSM parameter name to populate with a real Ollama backend URL after apply - see README.md."
+  value       = aws_ssm_parameter.ollama_url.name
+}
