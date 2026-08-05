@@ -171,3 +171,37 @@ class TaskStateStore:
             self._write_unlocked(state)
             return state[task_id]
 
+    def reap_stuck(self, task_id: str, *, stuck_status: str = "running", timeout_s: float) -> bool:
+        """Clear ``task_id`` if it is stuck at ``stuck_status`` past ``timeout_s``.
+
+        A crashed or killed process can leave a claim() at "running"
+        forever, since nothing here runs a background reaper. An external
+        caller (a cron/systemd wrapper) is expected to call this before
+        claim() on each scheduled fire. No per-entry timestamp exists in
+        this store's schema, so the state file's own mtime is used as a
+        proxy for "when was this entry last written" - exact enough for a
+        state file dedicated to a single task_id, which is how the
+        AWS autonomous-deployment wrapper uses this. Performing the
+        mtime check and the conditional delete inside one lock
+        acquisition (rather than a caller doing its own unlocked
+        read-then-write) avoids corrupting or losing a concurrent
+        claim()/update() call.
+
+        Returns True if a stuck entry was cleared, False otherwise
+        (nothing to reap, wrong status, or not yet past the timeout).
+        """
+        if not task_id.strip():
+            raise ValueError("invalid task state")
+        with self._lock():
+            if not self.path.exists():
+                return False
+            state = self._load_unlocked()
+            entry = state.get(task_id)
+            if not isinstance(entry, dict) or entry.get("status") != stuck_status:
+                return False
+            if time.time() - self.path.stat().st_mtime <= timeout_s:
+                return False
+            del state[task_id]
+            self._write_unlocked(state)
+            return True
+

@@ -1,4 +1,6 @@
 import json
+import os
+import time
 
 import pytest
 from concurrent.futures import ThreadPoolExecutor
@@ -45,6 +47,25 @@ def test_command_policy_blocks_package_manager_network_installs():
         "gem install rails",
         "cargo install ripgrep",
         "go install example.com/tool@latest",
+    ):
+        assert not evaluate_command(command).allowed, f"{command!r} should be blocked without network access"
+        assert evaluate_command(command, CommandPolicy(allow_network=True)).allowed, f"{command!r} should be allowed with network access"
+
+
+def test_command_policy_blocks_docker_npx_uv_git_clone_ssh_scp():
+    """Regression test: docker/npx/uv/uvx/git clone/ssh/scp reach the
+    network or escape sandboxing the same way curl/wget/pip install
+    already do, but were missing from the denylist - a real gap for the
+    manifest test/lint/security commands that route through this policy
+    (tools/runner.run_command)."""
+    for command in (
+        "docker run alpine",
+        "npx create-react-app app",
+        "uv pip install requests",
+        "uvx ruff",
+        "git clone https://example.com/repo.git",
+        "ssh user@example.com",
+        "scp file.txt user@example.com:/tmp",
     ):
         assert not evaluate_command(command).allowed, f"{command!r} should be blocked without network access"
         assert evaluate_command(command, CommandPolicy(allow_network=True)).allowed, f"{command!r} should be allowed with network access"
@@ -134,6 +155,79 @@ def test_task_state_claim_validates_like_update(tmp_path):
         store.claim("", "running")
     with pytest.raises(ValueError, match="invalid task state"):
         store.claim("nightly", "not-a-status")
+
+
+def test_reap_stuck_clears_a_claim_left_running_past_the_timeout(tmp_path):
+    """A crashed run leaves claim() at "running" forever with no built-in
+    reaping. An external wrapper (the AWS deployment's reap_stuck_claim
+    step) must be able to clear it, but only once it is genuinely stuck -
+    not merely running normally."""
+    store = TaskStateStore(tmp_path / "state.json")
+    store.claim("nightly", "running", unless_status=("running", "succeeded"))
+
+    # Not yet past the timeout: left alone.
+    assert store.reap_stuck("nightly", timeout_s=3600) is False
+    assert store.load()["nightly"]["status"] == "running"
+
+    # Past the timeout: cleared.
+    old = time.time() - 7200
+    os.utime(store.path, (old, old))
+    assert store.reap_stuck("nightly", timeout_s=3600) is True
+    assert "nightly" not in store.load()
+
+
+def test_reap_stuck_ignores_a_task_not_stuck_at_the_given_status(tmp_path):
+    store = TaskStateStore(tmp_path / "state.json")
+    store.update("nightly", "succeeded")
+    old = time.time() - 7200
+    os.utime(store.path, (old, old))
+
+    assert store.reap_stuck("nightly", timeout_s=3600) is False
+    assert store.load()["nightly"]["status"] == "succeeded"
+
+    assert store.reap_stuck("missing-task", timeout_s=3600) is False
+
+
+def test_reap_stuck_does_not_corrupt_a_concurrent_claim():
+    """The bug this closes: an external caller doing its own unlocked
+    read-then-write to reap a stuck entry can race a real claim()/update()
+    call and corrupt or lose it. reap_stuck() must perform its check and
+    write under the same lock claim()/update() use, so many concurrent
+    reap_stuck()/claim() calls interleave safely instead of corrupting
+    state.json."""
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = TaskStateStore(Path(tmp) / "state.json")
+        store.claim("stale-key", "running", unless_status=("running", "succeeded"))
+        old = time.time() - 7200
+        os.utime(store.path, (old, old))
+
+        def reap(_index):
+            return store.reap_stuck("stale-key", timeout_s=3600)
+
+        def claim(index):
+            return store.claim(f"other-{index}", "running", unless_status=("running", "succeeded"))
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            reap_results = list(pool.map(reap, range(4)))
+            list(pool.map(claim, range(4)))
+
+        assert sum(1 for r in reap_results if r) == 1
+        state = store.load()
+        assert "stale-key" not in state
+        assert all(state[f"other-{i}"]["status"] == "running" for i in range(4))
+
+
+def test_reap_stuck_validates_task_id():
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = TaskStateStore(Path(tmp) / "state.json")
+        with pytest.raises(ValueError, match="invalid task state"):
+            store.reap_stuck("", timeout_s=60)
 
 
 def test_event_hash_is_stable_for_same_event_shape(tmp_path):

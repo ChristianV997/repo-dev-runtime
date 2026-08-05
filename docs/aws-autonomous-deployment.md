@@ -60,7 +60,6 @@ Description=repo-dev-runtime scheduled autonomous pass
 [Service]
 Type=oneshot
 User=repo-dev-runtime
-EnvironmentFile=/etc/repo-dev-runtime/env
 ExecStart=/opt/repo-dev-runtime/run-once.sh
 ```
 
@@ -89,12 +88,14 @@ export DEV_RUNTIME_OLLAMA=true
 STATE_FILE=/var/lib/repo-dev-runtime/state.json
 STUCK_TIMEOUT_S=1800
 
-# Reap a claim left at "running" by a crash or a killed instance — the
-# scheduler's own claim() has no reaping logic (see "Known gap" below);
-# that must live in this wrapper, not in the library.
-python3 /opt/repo-dev-runtime/reap_stuck_claim.py \
-  --state-file "$STATE_FILE" --schedule-key nightly-review \
-  --stuck-timeout-s "$STUCK_TIMEOUT_S"
+# Reap a claim left at "running" by a crash or a killed instance, via
+# TaskStateStore.reap_stuck() (see "Known gap" below) rather than a
+# hand-rolled unlocked read/write, which could corrupt or lose a
+# concurrent claim()/update() call.
+python3 -c "
+from repo_dev_runtime.scheduler import TaskStateStore
+TaskStateStore('$STATE_FILE').reap_stuck('nightly-review', timeout_s=$STUCK_TIMEOUT_S)
+"
 
 cd /opt/repo-dev-runtime/target
 git fetch origin main --quiet
@@ -113,51 +114,24 @@ python3 -m repo_dev_runtime.cli run . \
 
 ### The known gap: a crashed run leaves a claim stuck at `"running"`
 
-`TaskStateStore.claim()` is atomic (single-lock compare-and-set) but has
-no reaping logic — if the instance is killed or the process crashes
-mid-run, the schedule key stays `"running"` forever and every subsequent
-scheduled fire is silently skipped. This must be handled by the external
-wrapper, not the library:
-
-```python
-# reap_stuck_claim.py
-#
-# TaskStateStore.claim()/update() record only {"status": ..., **details} -
-# no timestamp field exists in the entry itself (confirmed by reading
-# repo_dev_runtime/scheduler.py). The state file's own mtime is the only
-# available proxy for "when was this claim last written", since claim()
-# always does a real atomic os.replace() write. That's an approximation
-# (any key's claim bumps the whole file's mtime) but is exact enough for
-# a state file dedicated to a single --schedule-key, as used here.
-import argparse
-import json
-import time
-from pathlib import Path
-
-parser = argparse.ArgumentParser()
-parser.add_argument("--state-file", required=True)
-parser.add_argument("--schedule-key", required=True)
-parser.add_argument("--stuck-timeout-s", type=float, required=True)
-args = parser.parse_args()
-
-path = Path(args.state_file)
-if not path.exists():
-    raise SystemExit(0)
-state = json.loads(path.read_text(encoding="utf-8"))
-entry = state.get(args.schedule_key)
-if entry and entry.get("status") == "running":
-    if time.time() - path.stat().st_mtime > args.stuck_timeout_s:
-        del state[args.schedule_key]
-        path.write_text(json.dumps(state), encoding="utf-8")
-```
-
-If a single state file is ever shared across multiple `--schedule-key`
-values, switch to a per-key state file instead of adding a timestamp
-field of your own — that keeps this reaping check exact without
-depending on an assumption about `TaskStateStore`'s internal schema.
-Size `--stuck-timeout-s` comfortably above the manifest's
-`check_timeout_s` plus provider call overhead so a merely slow run isn't
-reaped while still legitimately in progress.
+`TaskStateStore.claim()` is atomic (single-lock compare-and-set) but
+performs no reaping on its own — if the instance is killed or the
+process crashes mid-run, the schedule key stays `"running"` forever and
+every subsequent scheduled fire is silently skipped.
+`TaskStateStore.reap_stuck(task_id, *, stuck_status="running",
+timeout_s)` (`repo_dev_runtime/scheduler.py`) closes this: it checks the
+state file's own mtime (the only available proxy for "when was this
+claim last written", since no per-entry timestamp exists in the
+schema) and clears a stuck entry — all inside the same lock
+`claim()`/`update()` use, so it can never corrupt or lose a concurrent
+write the way a hand-rolled unlocked read-then-write would. Call it from
+the wrapper (as in `run-once.sh` above) before every `claim()`-based
+`run` invocation. If a single state file is ever shared across multiple
+`--schedule-key` values, use a per-key state file instead — the mtime
+proxy is only exact for a file dedicated to one key. Size `timeout_s`
+comfortably above the manifest's `check_timeout_s` plus provider call
+overhead so a merely slow run isn't reaped while still legitimately in
+progress.
 
 ### Every invocation needs `--approve-paid`
 
@@ -203,8 +177,8 @@ s3://your-bucket/repo-dev-runtime-runs/ && find
    and falls back to Ollama when it isn't, and a real PR is opened.
 2. Kill the process mid-run deliberately, confirm the schedule key is
    left at `"running"` in `state.json`, then confirm
-   `reap_stuck_claim.py` clears it after the configured timeout and the
-   next scheduled fire proceeds instead of skipping.
+   `TaskStateStore.reap_stuck()` clears it after the configured timeout
+   and the next scheduled fire proceeds instead of skipping.
 3. Confirm IAM permissions are least-privilege: the instance role should
    only read the specific secret ARNs it needs, and the `GITHUB_TOKEN`
    should be scoped to `repo` only, per `docs/credential-policy.md`.

@@ -56,6 +56,23 @@ resource "aws_secretsmanager_secret" "openrouter_key" {
   tags = var.tags
 }
 
+# Same "container only" pattern as the two secrets above: Terraform sets
+# a placeholder value at creation and never overwrites it again
+# (lifecycle.ignore_changes), so the real, possibly credential-bearing
+# URL populated out-of-band never lands in Terraform state as plaintext -
+# closing the gap where an earlier revision of this module baked
+# ollama_url directly into the EC2 instance's user_data attribute.
+resource "aws_ssm_parameter" "ollama_url" {
+  name  = var.ollama_url_parameter_name
+  type  = "SecureString"
+  value = "REPLACE_ME"
+  tags  = var.tags
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
 resource "aws_iam_role" "instance" {
   name = "repo-dev-runtime-instance"
   assume_role_policy = jsonencode({
@@ -69,21 +86,29 @@ resource "aws_iam_role" "instance" {
   tags = var.tags
 }
 
-# Least-privilege: read access to exactly the two secrets this deployment
-# needs, nothing broader (no wildcard secretsmanager:* / resource "*").
+# Least-privilege: read access to exactly the two secrets and one SSM
+# parameter this deployment needs, nothing broader (no wildcard
+# secretsmanager:*/ssm:* or resource "*").
 resource "aws_iam_role_policy" "read_secrets" {
   name = "repo-dev-runtime-read-secrets"
   role = aws_iam_role.instance.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = ["secretsmanager:GetSecretValue"]
-      Resource = [
-        aws_secretsmanager_secret.github_token.arn,
-        aws_secretsmanager_secret.openrouter_key.arn,
-      ]
-    }]
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = ["secretsmanager:GetSecretValue"]
+        Resource = [
+          aws_secretsmanager_secret.github_token.arn,
+          aws_secretsmanager_secret.openrouter_key.arn,
+        ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter"]
+        Resource = [aws_ssm_parameter.ollama_url.arn]
+      },
+    ]
   })
 }
 
@@ -122,7 +147,7 @@ resource "aws_security_group" "instance" {
 resource "aws_instance" "runtime" {
   ami                    = data.aws_ami.al2023.id
   instance_type          = var.instance_type
-  subnet_id              = data.aws_subnets.default.ids[0]
+  subnet_id              = sort(data.aws_subnets.default.ids)[0]
   vpc_security_group_ids = [aws_security_group.instance.id]
   iam_instance_profile   = aws_iam_instance_profile.instance.name
   key_name               = var.key_name != "" ? var.key_name : null
@@ -135,7 +160,7 @@ resource "aws_instance" "runtime" {
     schedule_key               = var.schedule_key
     run_prompt                 = var.run_prompt
     openrouter_model           = var.openrouter_model
-    ollama_url                 = var.ollama_url
+    ollama_url_parameter_name  = var.ollama_url_parameter_name
     github_token_secret_name   = var.github_token_secret_name
     openrouter_key_secret_name = var.openrouter_key_secret_name
     aws_region                 = var.aws_region

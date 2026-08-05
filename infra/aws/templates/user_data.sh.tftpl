@@ -40,39 +40,6 @@ json.dump(data, open(path, "w"), indent=2)
 PYEOF
 fi
 
-cat > "$INSTALL_ROOT/reap_stuck_claim.py" <<'PYEOF'
-"""Reap a schedule-key claim left at "running" by a crashed or killed run.
-
-TaskStateStore.claim()/update() (repo_dev_runtime/scheduler.py) record only
-{"status": ..., **details} - no timestamp field exists in the entry itself.
-The state file's own mtime is the only available proxy for "when was this
-claim last written", since claim() always does a real atomic os.replace()
-write. That is an approximation (any key's claim bumps the whole file's
-mtime) but is exact enough for a state file dedicated to a single
---schedule-key, as used here. See docs/aws-autonomous-deployment.md.
-"""
-import argparse
-import json
-import time
-from pathlib import Path
-
-parser = argparse.ArgumentParser()
-parser.add_argument("--state-file", required=True)
-parser.add_argument("--schedule-key", required=True)
-parser.add_argument("--stuck-timeout-s", type=float, required=True)
-args = parser.parse_args()
-
-path = Path(args.state_file)
-if not path.exists():
-    raise SystemExit(0)
-state = json.loads(path.read_text(encoding="utf-8"))
-entry = state.get(args.schedule_key)
-if entry and entry.get("status") == "running":
-    if time.time() - path.stat().st_mtime > args.stuck_timeout_s:
-        del state[args.schedule_key]
-        path.write_text(json.dumps(state), encoding="utf-8")
-PYEOF
-
 cat > "$INSTALL_ROOT/run-once.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -82,14 +49,19 @@ export DEV_OMNIROUTE_TOKEN=\$(aws secretsmanager get-secret-value --region "${aw
 export DEV_OMNIROUTE_URL=https://openrouter.ai/api/v1
 export DEV_OMNIROUTE_MODEL="${openrouter_model}"
 export DEV_OMNIROUTE_ENABLED=true
-export OLLAMA_URL="${ollama_url}"
+export OLLAMA_URL=\$(aws ssm get-parameter --region "${aws_region}" --name "${ollama_url_parameter_name}" --with-decryption --query Parameter.Value --output text)
 export DEV_RUNTIME_OLLAMA=true
 
 STATE_FILE="$STATE_DIR/state.json"
 
-"$INSTALL_ROOT/venv/bin/python3.11" "$INSTALL_ROOT/reap_stuck_claim.py" \\
-  --state-file "\$STATE_FILE" --schedule-key "${schedule_key}" \\
-  --stuck-timeout-s "${reap_stuck_timeout_s}"
+# Reap a claim left at "running" by a crash or a killed instance, via
+# TaskStateStore.reap_stuck() rather than a hand-rolled unlocked
+# read/write, which could corrupt or lose a concurrent claim()/update()
+# call. See docs/aws-autonomous-deployment.md's "known gap" section.
+"$INSTALL_ROOT/venv/bin/python3.11" -c "
+from repo_dev_runtime.scheduler import TaskStateStore
+TaskStateStore('\$STATE_FILE').reap_stuck('${schedule_key}', timeout_s=${reap_stuck_timeout_s})
+"
 
 cd "$TARGET_DIR"
 git fetch origin "${target_repo_ref}" --quiet
@@ -106,7 +78,7 @@ git reset --hard "origin/${target_repo_ref}" --quiet
   --artifacts-root "$STATE_DIR/runs"
 EOF
 chmod +x "$INSTALL_ROOT/run-once.sh"
-chown "$RUNTIME_USER":"$RUNTIME_USER" "$INSTALL_ROOT/run-once.sh" "$INSTALL_ROOT/reap_stuck_claim.py"
+chown "$RUNTIME_USER":"$RUNTIME_USER" "$INSTALL_ROOT/run-once.sh"
 
 cat > /etc/systemd/system/repo-dev-runtime.service <<EOF
 [Unit]

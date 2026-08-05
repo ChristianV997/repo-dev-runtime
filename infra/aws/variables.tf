@@ -63,10 +63,10 @@ variable "openrouter_model" {
   default     = "anthropic/claude-3.5-sonnet"
 }
 
-variable "ollama_url" {
-  description = "Reachable Ollama backend URL used as the routing backup. Stored in SSM Parameter Store, not Terraform state, if it contains anything sensitive."
+variable "ollama_url_parameter_name" {
+  description = "Name of the SSM SecureString parameter holding the reachable Ollama backend URL. Terraform creates the parameter with a placeholder value only (and never overwrites it on subsequent applies via lifecycle.ignore_changes) - populate the real value out-of-band (see README.md) so it never enters Terraform state as a plaintext instance user-data value."
   type        = string
-  default     = "http://127.0.0.1:11434"
+  default     = "/repo-dev-runtime/ollama-url"
 }
 
 variable "github_token_secret_name" {

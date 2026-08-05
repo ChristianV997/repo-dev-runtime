@@ -84,6 +84,19 @@ def test_live_aider_edits_require_an_independent_reviewer_provider(tmp_path, cap
     assert payload["reason"] == "aider_requires_routable_core_and_independent_reviewer"
 
 
+def test_live_aider_edits_accept_sidecars_as_the_independent_reviewer(tmp_path, capsys):
+    """RoutingPolicy's reviewer preference list includes hermes/deerflow
+    (registry.py), so --enable-sidecars alone is a real independent
+    reviewer for Aider's final review, same as --enable-omniroute or
+    --enable-pr-agent - the gate must not reject this combination."""
+    code, payload = _run_cli([
+        "run", str(tmp_path), "--prompt", "inspect", "--live", "--enable-aider", "--enable-ollama",
+        "--enable-sidecars", "--apply-edits",
+        "--artifacts-root", str(tmp_path / "artifacts"),
+    ], capsys)
+    assert payload.get("reason") != "aider_requires_routable_core_and_independent_reviewer"
+
+
 def test_run_handoff_requires_explicit_vault(tmp_path, capsys):
     code, payload = _run_cli([
         "run", str(tmp_path), "--prompt", "inspect", "--write-handoff",

@@ -26,9 +26,9 @@ class CommandPolicy:
     # being enumerated here.
     network_substrings: tuple[str, ...] = (
         "pip install", "pip3 install", "npm install", "npm ci", "npm i ",
-        "yarn add", "yarn install", "pnpm add", "pnpm install",
+        "npm exec", "yarn add", "yarn install", "pnpm add", "pnpm install",
         "poetry install", "poetry add", "gem install", "cargo install",
-        "go install", "go get",
+        "go install", "go get", "git clone",
     )
     allow_network: bool = False
     allow_branch_publish: bool = False
@@ -51,7 +51,7 @@ def evaluate_command(command: str, policy: CommandPolicy | None = None) -> Comma
         if blocked.lower() in normalized:
             return CommandDecision(False, f"blocked command pattern: {blocked}")
     if not active.allow_network:
-        if any(token in normalized.split() for token in ("curl", "wget", "invoke-webrequest", "irm", "iwr")):
+        if any(token in normalized.split() for token in ("curl", "wget", "invoke-webrequest", "irm", "iwr", "docker", "npx", "uv", "uvx", "ssh", "scp")):
             return CommandDecision(False, "network command is disabled")
         for blocked in active.network_substrings:
             if blocked in normalized:
