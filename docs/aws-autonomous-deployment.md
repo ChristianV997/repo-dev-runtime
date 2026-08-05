@@ -2,14 +2,19 @@
 
 A concrete deployment design for running `repo-dev-runtime` unattended,
 on a fixed cadence, against a target repository — including against
-`repo-dev-runtime` itself. This is an operational runbook, not new
-in-repo code: it composes the existing `run` CLI, the atomic
+`repo-dev-runtime` itself. It composes the existing `run` CLI, the atomic
 `--scheduler-state-file`/`--schedule-key` primitives
 (`repo_dev_runtime/scheduler.py`'s `TaskStateStore.claim()`), and the
 OpenRouter-primary/Ollama-backup routing described in README.md's
-"OpenRouter as primary, Ollama as backup" section. Nothing here is
-bundled into the package; whether to check in a Dockerfile/systemd unit
-for this is a separate, later decision the user should make explicitly.
+"OpenRouter as primary, Ollama as backup" section.
+
+**This design is now also real, applicable Terraform**: `infra/aws/`
+implements everything below — EC2 instance, IAM role/instance profile,
+Secrets Manager containers, and the cloud-init bootstrap that installs
+the wrapper script, reaper, and `systemd` unit/timer — as a module you
+apply against your own AWS account. See `infra/aws/README.md` for the
+exact `terraform apply` steps. This doc remains the design rationale;
+that module is the runnable implementation of it.
 
 ## Architecture
 
